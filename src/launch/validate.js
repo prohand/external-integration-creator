@@ -67,5 +67,6 @@ export function validateLaunch(body) {
     spec,
     actions,
     simulate: body.simulate === true,
+    autoFilled: body.autoFilled === true,
   };
 }

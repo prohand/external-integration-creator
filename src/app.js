@@ -10,12 +10,12 @@ import { STORE_CATEGORIES } from './categories.js';
 import { GitHub } from './github.js';
 import { checkToken } from './github-check.js';
 import { log, registerSecret } from './log.js';
-import { defaultRepoName } from './names.js';
 import { checkName } from './launch/checks.js';
 import { KEYWORDS_MIN_GLADYS, dockerImage } from './launch/files.js';
 import { Runner, channelOf } from './launch/runner.js';
 import { OPTIONS, STEPS } from './launch/steps.js';
 import { validateLaunch } from './launch/validate.js';
+import { autofillFromIdea } from './launch/autofill.js';
 import {
   createPost,
   currentUser,
@@ -70,14 +70,6 @@ function card(item) {
     notes: item.notes?.length ? item.notes : undefined,
     source: item.source,
   };
-}
-
-/** "A long sentence…" cut at a word boundary to fit `max` characters. */
-function shorten(text, max = 100) {
-  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
-  if (clean.length <= max) return clean;
-  const cut = clean.slice(0, max - 1);
-  return `${cut.slice(0, cut.lastIndexOf(' ') > 40 ? cut.lastIndexOf(' ') : cut.length).replace(/[\s,;:.]+$/, '')}…`;
 }
 
 export function createApp({ config, db, hub = new Hub() }) {
@@ -329,23 +321,20 @@ export function createApp({ config, db, hub = new Hub() }) {
     return { ...announced, count: chosen.length };
   });
 
-  router.get('/api/prefill', async ({ query }) => {
-    const key = query.get('idea') ?? '';
+  async function findIdea(key) {
     const { board: b } = await board();
-    const idea = Object.values(b.columns)
+    return Object.values(b.columns)
       .flat()
       .find((i) => i.key === key);
-    const name = idea?.name ?? '';
+  }
+
+  router.get('/api/prefill', async ({ query }) => {
+    const idea = await findIdea(query.get('idea') ?? '');
     const owner = await resolveOwner();
-    return {
-      idea: idea ? card(idea) : null,
-      displayName: name,
-      repoName: name ? defaultRepoName(name) : '',
-      owner,
-      categories: idea?.categories ?? [],
-      description: { fr: '', en: idea?.description ? shorten(idea.description) : '', de: '', es: '' },
-      keywords: name ? [name.toLowerCase()] : [],
-    };
+    const filled = idea
+      ? autofillFromIdea(idea)
+      : { displayName: '', repoName: '', categories: [], description: { fr: '', en: '', de: '', es: '' }, keywords: [], spec: '' };
+    return { ...filled, idea: idea ? card(idea) : null, owner };
   });
 
   router.get('/api/check-name', async ({ query }) => {
@@ -370,8 +359,17 @@ export function createApp({ config, db, hub = new Hub() }) {
       .map(({ steps, ...rest }) => rest),
   );
 
-  router.post('/api/launches', async ({ body }) => {
-    const request = validateLaunch(body ?? {});
+  // One click: everything filled from the tracker idea.
+  router.post('/api/launches/quick', async ({ body }) => {
+    const idea = await findIdea(String(body?.ideaKey ?? ''));
+    if (!idea) throw new ApiError(404, 'Idée introuvable dans le tracker.');
+    if (idea.bucket !== 'free') throw new ApiError(409, `« ${idea.name} » n’est plus libre (${idea.status}).`);
+    return startLaunch(validateLaunch({ ...autofillFromIdea(idea), simulate: body?.simulate === true }));
+  });
+
+  router.post('/api/launches', ({ body }) => startLaunch(validateLaunch(body ?? {})));
+
+  async function startLaunch(request) {
     const simulate = config.dryRun || request.simulate;
     if (!simulate && !REAL_LAUNCH_READY) {
       throw new ApiError(501, 'Le lancement réel arrive à la phase 3 : cochez « Simulation » pour l’instant.');
@@ -396,7 +394,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     });
     runner.start(integ.id);
     return runner.view(runner.find(integ.id));
-  });
+  }
 
   router.get('/api/launches/:id', ({ params }) => runner.view(runner.find(params.id)));
 

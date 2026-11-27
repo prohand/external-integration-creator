@@ -239,12 +239,12 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
 
 ## Utilisation
 
-1. **Tableau de bord** : choisissez une idée dans la colonne « Libre », puis cliquez sur **Lancer**.
-2. **Lancer** :
-   - le nom est vérifié en direct (tracker, store, forum et GitHub) ;
-   - remplissez la description en 4 langues (10 à 100 caractères chacune), 1 à 3 catégories, des mots-clés et le cahier des charges ;
-   - cochez les actions automatiques voulues ;
-   - décochez « Simulation » pour un vrai lancement : l'appli demande une confirmation avant de créer le dépôt public.
+1. **Tableau de bord** : choisissez une idée dans la colonne « Libre », puis cliquez sur **Lancer**. Après une confirmation, tout part :
+   - le nom, le dépôt et les catégories viennent du tracker ;
+   - la description anglaise reprend celle de Home Assistant, les descriptions fr, de et es sont génériques. Claude est chargé d'en écrire de vraies (c'est dans l'issue et dans `CLAUDE.md`) ;
+   - le cahier des charges demande de reproduire l'intégration Home Assistant, avec le lien vers sa documentation ;
+   - pas de mots-clés par défaut : l'intégration reste compatible avec Gladys 5.1.0.
+2. **Personnaliser…** (lien sous le bouton Lancer) ouvre le formulaire : nom, dépôt et vérification du nom en direct. Le reste (descriptions, catégories, mots-clés, cahier des charges, actions automatiques, simulation) est dans le bloc **Avancé**, replié.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
 4. **Suivi, onglet Développement** : voir [Suivre le développement en direct](#suivre-le-développement-en-direct).
 5. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.

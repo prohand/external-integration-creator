@@ -346,7 +346,10 @@ export function issueTitle(displayName) {
   return `Développement de l'intégration ${displayName}`;
 }
 
-export function issueBody({ displayName, description, spec, claude }) {
+export function issueBody({ displayName, description, spec, claude, autoFilled }) {
+  const checklist = autoFilled
+    ? ['Descriptions fr, de et es rédigées dans le manifeste (10 à 100 caractères)', ...ISSUE_CHECKLIST]
+    : ISSUE_CHECKLIST;
   const intro = claude
     ? "@claude Développe cette intégration Gladys en suivant le cahier des charges ci-dessous et les règles de `CLAUDE.md`. Travaille sur une branche, ouvre une pull request quand les tests passent, et coche la check-list au fur et à mesure.\n\n"
     : '';
@@ -360,7 +363,7 @@ ${String(spec ?? '').trim() || '_Pas de cahier des charges détaillé._'}
 
 ## Check-list jusqu'à la publication
 
-${ISSUE_CHECKLIST.map((item) => `- [ ] ${item}`).join('\n')}
+${checklist.map((item) => `- [ ] ${item}`).join('\n')}
 
 ---
 _Issue créée par External Integration Creator._

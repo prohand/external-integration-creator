@@ -163,10 +163,40 @@ function renderCard(item, column) {
       { class: 'card-foot' },
       h('span', { class: 'card-links' }, links),
       column === 'free'
-        ? h('a', { class: 'button button-primary', href: `#/lancer/${encodeURIComponent(item.key)}` }, 'Lancer')
+        ? h(
+            'span',
+            { class: 'card-actions' },
+            h('a', { class: 'small', href: `#/lancer/${encodeURIComponent(item.key)}` }, 'Personnaliser…'),
+            h('button', { class: 'button button-primary', type: 'button', onclick: (e) => quickLaunch(item, e.currentTarget) }, 'Lancer'),
+          )
         : null,
     ),
   );
+}
+
+/** One click: everything is filled from the tracker, one confirmation. */
+async function quickLaunch(item, button) {
+  const s = state.status;
+  const simulated = s.dryRun || !s.realLaunch;
+  if (!simulated && !s.owner) {
+    alert('Réglez d’abord le jeton GitHub (.env) ou le compte cible (Réglages).');
+    return;
+  }
+  const repo = `${s.owner ?? 'votre-compte'}/${defaultRepoName(item.name)}`;
+  const message = simulated
+    ? `Simuler le lancement de « ${item.name} » ? Rien ne sera créé.`
+    : `Lancer « ${item.name} » ?\n\nLe dépôt public ${repo} va être créé sur GitHub, avec son issue de suivi` +
+      `${s.claudeTokenSet ? ', et Claude se met au travail' : ''}.\n\nTout est rempli depuis le tracker ; Claude rédige ensuite les descriptions.`;
+  if (!confirm(message)) return;
+  button.disabled = true;
+  try {
+    const launch = await api('launches/quick', { method: 'POST', body: { ideaKey: item.key } });
+    state.dashboard = null;
+    location.hash = `#/suivi/${launch.id}`;
+  } catch (err) {
+    alert(err.message);
+    button.disabled = false;
+  }
 }
 
 function renderColumns() {
@@ -429,7 +459,7 @@ async function showLaunch(key) {
     description: { ...prefill.description },
     categories: new Set(prefill.categories),
     keywords: prefill.keywords.join(', '),
-    spec: '',
+    spec: prefill.spec ?? '',
     actions: Object.fromEntries(s.options.map((o) => [o.key, true])),
     simulate: s.dryRun || !s.realLaunch,
   };
@@ -442,6 +472,8 @@ async function showLaunch(key) {
   };
   const showErrors = (details = {}) => {
     for (const [name, el] of Object.entries(errors)) el.textContent = details[name] ?? '';
+    // An error in a folded field: unfold the "Avancé" block.
+    if (Object.keys(details).some((k) => k !== 'displayName' && k !== 'repoName')) advanced.open = true;
   };
 
   // Name + repository + live check.
@@ -683,6 +715,8 @@ async function showLaunch(key) {
           spec: form.spec,
           actions: form.actions,
           simulate: form.simulate,
+          // Generic descriptions kept: Claude is asked to write real ones.
+          autoFilled: ['fr', 'de', 'es'].some((l) => form.description[l] === prefill.description[l]),
         },
       });
       state.dashboard = null; // reservations may have changed
@@ -694,6 +728,56 @@ async function showLaunch(key) {
       submit.textContent = 'Lancer';
     }
   };
+
+  const advanced = h(
+    'details',
+    { class: 'advanced' },
+    h('summary', {}, 'Avancé : descriptions, catégories, mots-clés, cahier des charges, options'),
+    h(
+      'fieldset',
+      {},
+      h('legend', {}, 'Description du store (10 à 100 caractères)'),
+      descFields,
+      copyEnglish,
+    ),
+    h(
+      'fieldset',
+      {},
+      h('legend', {}, h('span', {}, 'Catégories (1 à 3) '), catCount),
+      categories,
+      errorEl('categories'),
+    ),
+    h(
+      'fieldset',
+      {},
+      h('legend', {}, 'Mots-clés et cahier des charges'),
+      field(
+        'Mots-clés (séparés par des virgules)',
+        h('input', {
+          type: 'text',
+          value: form.keywords,
+          oninput: (e) => {
+            form.keywords = e.target.value;
+          },
+        }),
+        {
+          hint: `Facultatif. Avec des mots-clés, le manifeste demande Gladys ${s.keywordsMinGladys} minimum (règle du store).`,
+          error: errorEl('keywords'),
+        },
+      ),
+      field(
+        'Cahier des charges',
+        h('textarea', {
+          rows: 8,
+          oninput: (e) => {
+            form.spec = e.target.value;
+          },
+        }, form.spec),
+        { hint: 'Ajouté à CLAUDE.md (section « Objectif ») et à l’issue de suivi.', error: errorEl('spec') },
+      ),
+    ),
+    h('fieldset', {}, h('legend', {}, 'Actions automatiques'), options, simulate),
+  );
 
   setView(
     h('p', {}, h('a', { href: '#/' }, '← Tableau de bord')),
@@ -714,53 +798,14 @@ async function showLaunch(key) {
         preview,
         checkBox,
       ),
-      h(
-        'fieldset',
-        {},
-        h('legend', {}, 'Description du store (10 à 100 caractères)'),
-        descFields,
-        copyEnglish,
-      ),
-      h(
-        'fieldset',
-        {},
-        h('legend', {}, h('span', {}, 'Catégories (1 à 3) '), catCount),
-        categories,
-        errorEl('categories'),
-      ),
-      h(
-        'fieldset',
-        {},
-        h('legend', {}, 'Mots-clés et cahier des charges'),
-        field(
-          'Mots-clés (séparés par des virgules)',
-          h('input', {
-            type: 'text',
-            value: form.keywords,
-            oninput: (e) => {
-              form.keywords = e.target.value;
-            },
-          }),
-          {
-            hint: `Avec des mots-clés, le manifeste demande Gladys ${s.keywordsMinGladys} minimum (règle du store).`,
-            error: errorEl('keywords'),
-          },
-        ),
-        field(
-          'Cahier des charges',
-          h('textarea', {
-            rows: 8,
-            placeholder: 'Ce que doit faire l’intégration : appareils, fonctions, API utilisée, limites…',
-            oninput: (e) => {
-              form.spec = e.target.value;
-            },
-          }),
-          { hint: 'Ajouté à CLAUDE.md (section « Objectif ») et à l’issue de suivi.', error: errorEl('spec') },
-        ),
-      ),
-      h('fieldset', {}, h('legend', {}, 'Actions automatiques'), options, simulate),
       formError,
       h('div', { class: 'form-actions' }, submit),
+      h(
+        'p',
+        { class: 'muted small' },
+        'Le reste est rempli depuis le tracker. Claude rédige ensuite les vraies descriptions fr, de et es.',
+      ),
+      advanced,
     ),
   );
   renderPreview();
