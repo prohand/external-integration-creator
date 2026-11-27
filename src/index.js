@@ -19,7 +19,9 @@ registerSecret(config.githubToken);
 registerSecret(config.appPassword);
 
 const db = await new Db(config.dataDir).load();
+for (const value of Object.values(db.read().secrets)) registerSecret(value);
 const app = createApp({ config, db });
+await app.runner.recover();
 
 app.server.listen(config.port, config.host, () => {
   log.info(

@@ -21,6 +21,9 @@ const DEFAULTS = {
   GITHUB_WEB_URL: 'https://github.com',
   GITHUB_TOKEN: '',
   HTTP_TIMEOUT_SECONDS: '20',
+  TEMPLATE_REPO: 'GladysAssistant/integration-template-js',
+  BRANCH_WAIT_SECONDS: '90',
+  BRANCH_POLL_MS: '2000',
 };
 
 function bool(value) {
@@ -33,6 +36,12 @@ function positiveNumber(name, value) {
     throw new Error(`Invalid value for ${name}: "${value}" (a positive number is expected)`);
   }
   return n;
+}
+
+function parseRepo(name, value) {
+  const match = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/.exec(String(value).trim());
+  if (!match) throw new Error(`Invalid value for ${name}: "${value}" (owner/repo expected)`);
+  return { owner: match[1], repo: match[2] };
 }
 
 function trimSlash(url) {
@@ -75,5 +84,8 @@ export function loadConfig(env = process.env) {
     githubWebUrl: trimSlash(get('GITHUB_WEB_URL')),
     githubToken: get('GITHUB_TOKEN'),
     httpTimeoutMs: positiveNumber('HTTP_TIMEOUT_SECONDS', get('HTTP_TIMEOUT_SECONDS')) * 1000,
+    template: parseRepo('TEMPLATE_REPO', get('TEMPLATE_REPO')),
+    branchWaitMs: positiveNumber('BRANCH_WAIT_SECONDS', get('BRANCH_WAIT_SECONDS')) * 1000,
+    branchPollMs: positiveNumber('BRANCH_POLL_MS', get('BRANCH_POLL_MS')),
   });
 }
