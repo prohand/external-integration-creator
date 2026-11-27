@@ -17,6 +17,7 @@ import { parseTopics } from '../settings.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const sim = (ctx) => (ctx.dryRun ? 'Simulation : ' : '');
 const repoPath = (integ) => `/repos/${integ.owner}/${integ.repoName}`;
 const repoUrl = (integ) => `https://github.com/${integ.owner}/${integ.repoName}`;
 
@@ -241,13 +242,13 @@ async function stepSecurity(ctx) {
     if (wanted[key] === false) continue;
     try {
       await ctx.gh.put(`${repoPath(ctx.integ)}/${path}`);
-      ctx.log(`Activé : ${label}`);
+      if (!ctx.dryRun) ctx.log(`Activé : ${label}`);
     } catch (err) {
       failed.push(`${label} (${err.message})`);
     }
   }
   if (failed.length) return { status: 'warning', message: `Non activé : ${failed.join(' ; ')}` };
-  return { message: 'Alertes, correctifs automatiques et signalement privé activés.' };
+  return { message: `${sim(ctx)}Alertes, correctifs automatiques et signalement privé activés.` };
 }
 
 async function stepActionsPermissions(ctx) {
@@ -256,7 +257,9 @@ async function stepActionsPermissions(ctx) {
     can_approve_pull_request_reviews: true,
   };
   await ctx.gh.put(`${repoPath(ctx.integ)}/actions/permissions/workflow`, body);
-  return { message: `Jeton des workflows : ${body.default_workflow_permissions}, approbation des PR autorisée.` };
+  return {
+    message: `${sim(ctx)}Jeton des workflows : ${body.default_workflow_permissions}, approbation des PR autorisée.`,
+  };
 }
 
 async function stepTopics(ctx) {
@@ -272,12 +275,12 @@ async function stepTopics(ctx) {
     .filter((t) => t !== official) // not yet: the store would index an empty integration
     .slice(0, 20);
   await gh.put(`${repoPath(integ)}/topics`, { names });
-  return { message: `Topics : ${names.join(', ')}` };
+  return { message: `${sim(ctx)}Topics : ${names.join(', ')}` };
 }
 
 async function stepWatch(ctx) {
   await ctx.gh.put(`${repoPath(ctx.integ)}/subscription`, { subscribed: true, ignored: false });
-  return { message: 'Dépôt suivi (Watch).' };
+  return { message: `${sim(ctx)}Dépôt suivi (Watch).` };
 }
 
 async function stepLabels(ctx) {
@@ -290,11 +293,11 @@ async function stepLabels(ctx) {
         description: label.description,
       });
       ctx.log(`Étiquette mise à jour : ${label.name}`);
-    } else {
+    } else if (!ctx.dryRun) {
       ctx.log(`Étiquette créée : ${label.name}`);
     }
   }
-  return { message: `Étiquettes : ${labels.map((l) => l.name).join(', ')}` };
+  return { message: `${sim(ctx)}Étiquettes : ${labels.map((l) => l.name).join(', ')}` };
 }
 
 // --- 11. Claude secret ------------------------------------------------------------------------

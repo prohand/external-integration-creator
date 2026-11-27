@@ -10,7 +10,8 @@ export function mdInline(value) {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/([\\`*_[\]<>|])/g, '\\$1')
-    .replace(/^([#>+-]|\d+[.)])(?=\s|$)/, '\\$1');
+    .replace(/^([#>+-])(?=\s|$)/, '\\$1')
+    .replace(/^(\d+)([.)])(?=\s|$)/, '$1\\$2');
 }
 
 /** Free text in a fenced block: kept verbatim, whatever it contains. */

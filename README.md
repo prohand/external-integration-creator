@@ -9,7 +9,7 @@ Petite application web, à héberger chez soi, pour la communauté [Gladys Assis
 
 Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'instance publique, et aucune donnée n'est partagée.
 
-> **État du projet** : phase 1 sur 5 (sources et tableau de bord). Le lancement, le suivi et la publication arrivent dans les phases suivantes.
+> **État du projet** : phase 2 sur 5. Le tableau de bord et le lancement **en simulation** marchent. Le lancement réel, le suivi du développement et la publication arrivent dans les phases suivantes.
 
 ---
 
@@ -180,6 +180,17 @@ docker compose start
 Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu sûr.
 
 ---
+
+## Utilisation
+
+1. **Tableau de bord** : choisissez une idée dans la colonne « Libre », puis cliquez sur **Lancer**.
+2. **Lancer** :
+   - le nom est vérifié en direct (tracker, store, forum et GitHub) ;
+   - remplissez la description en 4 langues (10 à 100 caractères chacune), 1 à 3 catégories, des mots-clés et le cahier des charges ;
+   - cochez les actions automatiques voulues.
+3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
+4. **Mes intégrations** : toutes vos intégrations lancées et leur état. Une simulation peut être oubliée.
+5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, accès au forum. Les clés ne sont jamais réaffichées.
 
 ## Mode simulation
 

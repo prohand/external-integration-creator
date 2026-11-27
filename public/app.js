@@ -295,37 +295,793 @@ async function showDashboard() {
   renderDashboard();
 }
 
-// --- other screens (filled in the next phases) ---------------------------------
+// --- shared bits for the next screens ---------------------------------------------
 
-function showLaunch(key) {
-  const all = state.dashboard ? Object.values(state.dashboard.columns).flat() : [];
-  const item = all.find((i) => i.key === key);
-  setView(
-    h('h1', {}, `Lancer ${item ? item.name : ''}`),
-    h('p', { class: 'muted' }, 'Le formulaire de lancement arrive à l’étape suivante.'),
-    h('a', { class: 'button', href: '#/' }, 'Retour au tableau de bord'),
+let stream = null; // EventSource of the follow screen
+
+function closeStream() {
+  if (stream) {
+    stream.close();
+    stream = null;
+  }
+}
+
+function slugify(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '');
+}
+
+function defaultRepoName(name) {
+  const slug = slugify(name).replace(/^gladys-/, '');
+  return slug ? `gladys-${slug}` : '';
+}
+
+const STEP_LABELS = {
+  todo: 'À faire',
+  running: 'En cours',
+  done: 'Fait',
+  warning: 'Attention',
+  error: 'Erreur',
+  skipped: 'Sautée',
+};
+
+const OVERALL_LABELS = {
+  running: 'En cours',
+  done: 'Terminé',
+  warning: 'Terminé avec avertissements',
+  error: 'Erreur',
+  todo: 'Incomplet',
+};
+
+function statusBadge(status, labels = STEP_LABELS) {
+  return h('span', { class: `badge st st-${status}` }, labels[status] ?? status);
+}
+
+function loading(text = 'Chargement…') {
+  return h('p', { class: 'muted' }, text);
+}
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+const CHECK_ICONS = { true: '✓', false: '✗', null: '?' };
+
+function renderChecks(checks) {
+  return h(
+    'ul',
+    { class: 'checks' },
+    checks.map((c) =>
+      h(
+        'li',
+        { class: `check check-${c.ok === true ? 'ok' : c.ok === false ? 'ko' : 'unknown'}` },
+        h('span', { class: 'check-icon', 'aria-hidden': 'true' }, CHECK_ICONS[String(c.ok)]),
+        h('strong', {}, c.label),
+        ' ',
+        h('span', {}, c.message),
+        c.link ? [' ', extLink(c.link, 'voir')] : null,
+      ),
+    ),
   );
 }
 
-function showMine() {
-  setView(h('h1', {}, 'Mes intégrations'), h('p', { class: 'muted' }, 'Aucune intégration lancée pour l’instant.'));
+// --- launch form ---------------------------------------------------------------------
+
+const LANGS = [
+  { key: 'fr', label: 'Français' },
+  { key: 'en', label: 'Anglais' },
+  { key: 'de', label: 'Allemand' },
+  { key: 'es', label: 'Espagnol' },
+];
+
+function field(label, control, { hint, error } = {}) {
+  return h(
+    'label',
+    { class: 'field' },
+    h('span', { class: 'field-label' }, label),
+    control,
+    hint ? h('span', { class: 'muted small' }, hint) : null,
+    error,
+  );
 }
 
-function showSettings() {
+async function showLaunch(key) {
+  closeStream();
+  setView(loading('Préparation du formulaire…'));
+  let prefill;
+  try {
+    prefill = await api(`prefill?idea=${encodeURIComponent(key)}`);
+  } catch (err) {
+    setView(errorBox(err.message));
+    return;
+  }
   const s = state.status;
+  const form = {
+    displayName: prefill.displayName,
+    repoName: prefill.repoName,
+    repoEdited: false,
+    description: { ...prefill.description },
+    categories: new Set(prefill.categories),
+    keywords: prefill.keywords.join(', '),
+    spec: '',
+    actions: Object.fromEntries(s.options.map((o) => [o.key, true])),
+    simulate: true,
+  };
+  if (!s.claudeTokenSet) form.actions.claude = false;
+  if (!s.forumReady) form.actions.forum = false;
+
+  const errors = {};
+  const errorEl = (name) => {
+    errors[name] = h('span', { class: 'field-error', role: 'alert' });
+    return errors[name];
+  };
+  const showErrors = (details = {}) => {
+    for (const [name, el] of Object.entries(errors)) el.textContent = details[name] ?? '';
+  };
+
+  // Name + repository + live check.
+  const owner = prefill.owner;
+  const preview = h('div', { class: 'preview' });
+  const checkBox = h('div', { class: 'check-box' }, loading('Vérification du nom…'));
+  const renderPreview = () => {
+    const repo = form.repoName || '…';
+    preview.replaceChildren(
+      owner
+        ? h(
+            'dl',
+            { class: 'facts' },
+            h('dt', {}, 'Dépôt'),
+            h('dd', {}, h('code', {}, `https://github.com/${owner}/${repo}`)),
+            h('dt', {}, 'Image'),
+            h('dd', {}, h('code', {}, `ghcr.io/${owner}/${repo}:1.0.0`.toLowerCase())),
+          )
+        : h(
+            'p',
+            { class: 'alert alert-warn' },
+            'Compte GitHub cible inconnu : réglez-le dans ',
+            h('a', { href: '#/reglages' }, 'Réglages'),
+            '.',
+          ),
+    );
+  };
+  let checkSeq = 0;
+  const runCheck = debounce(async () => {
+    const seq = ++checkSeq;
+    if (!form.displayName.trim() || !form.repoName.trim()) {
+      checkBox.replaceChildren(h('p', { class: 'muted' }, 'Saisissez un nom.'));
+      return;
+    }
+    checkBox.replaceChildren(loading('Vérification du nom…'));
+    try {
+      const params = new URLSearchParams({ displayName: form.displayName, repoName: form.repoName, ideaKey: key });
+      const report = await api(`check-name?${params}`);
+      if (seq !== checkSeq) return;
+      checkBox.replaceChildren(
+        h(
+          'p',
+          { class: report.conflicts ? 'alert alert-error' : report.unknown ? 'alert alert-warn' : 'alert alert-ok' },
+          report.conflicts
+            ? 'Ce nom est déjà pris.'
+            : report.unknown
+              ? 'Nom libre, mais une source n’a pas pu être vérifiée.'
+              : 'Nom libre partout.',
+        ),
+        renderChecks(report.checks),
+      );
+    } catch (err) {
+      if (seq === checkSeq) checkBox.replaceChildren(errorBox(err.message));
+    }
+  }, 600);
+
+  const repoInput = h('input', {
+    type: 'text',
+    value: form.repoName,
+    required: true,
+    spellcheck: 'false',
+    autocomplete: 'off',
+    oninput: (e) => {
+      form.repoName = e.target.value.trim();
+      form.repoEdited = true;
+      renderPreview();
+      runCheck();
+    },
+  });
+  const nameInput = h('input', {
+    type: 'text',
+    value: form.displayName,
+    required: true,
+    maxlength: 60,
+    oninput: (e) => {
+      form.displayName = e.target.value;
+      if (!form.repoEdited) {
+        form.repoName = defaultRepoName(form.displayName);
+        repoInput.value = form.repoName;
+      }
+      renderPreview();
+      runCheck();
+    },
+  });
+
+  // Descriptions with counters.
+  const descInputs = {};
+  const counter = (lang) => {
+    const el = h('span', { class: 'counter small' });
+    const update = () => {
+      const n = (form.description[lang] ?? '').trim().length;
+      el.textContent = `${n} / 100`;
+      el.classList.toggle('counter-bad', n < 10 || n > 100);
+    };
+    update();
+    return { el, update };
+  };
+  const descFields = LANGS.map(({ key: lang, label }) => {
+    const c = counter(lang);
+    descInputs[lang] = h('input', {
+      type: 'text',
+      value: form.description[lang] ?? '',
+      maxlength: 120,
+      oninput: (e) => {
+        form.description[lang] = e.target.value;
+        c.update();
+      },
+    });
+    descInputs[lang].counter = c;
+    return field(h('span', {}, `Description (${label}) `, c.el), descInputs[lang], { error: errorEl(`description.${lang}`) });
+  });
+  const copyEnglish = h(
+    'button',
+    {
+      class: 'button small',
+      type: 'button',
+      onclick: () => {
+        for (const { key: lang } of LANGS) {
+          if (!form.description[lang]?.trim()) {
+            form.description[lang] = form.description.en ?? '';
+            descInputs[lang].value = form.description[lang];
+            descInputs[lang].counter.update();
+          }
+        }
+      },
+    },
+    'Copier l’anglais dans les champs vides',
+  );
+
+  // Categories (1 to 3).
+  const catBoxes = [];
+  const catCount = h('span', { class: 'counter small' });
+  const syncCats = () => {
+    catCount.textContent = `${form.categories.size} / 3`;
+    for (const box of catBoxes) box.disabled = !box.checked && form.categories.size >= 3;
+  };
+  const categories = h(
+    'div',
+    { class: 'grid-checks' },
+    s.categories.map((c) => {
+      const box = h('input', {
+        type: 'checkbox',
+        value: c.key,
+        checked: form.categories.has(c.key),
+        onchange: (e) => {
+          if (e.target.checked) form.categories.add(c.key);
+          else form.categories.delete(c.key);
+          syncCats();
+        },
+      });
+      catBoxes.push(box);
+      return h('label', { class: 'check-line' }, box, ` ${c.label}`);
+    }),
+  );
+  syncCats();
+
+  // Automatic actions.
+  const options = h(
+    'div',
+    { class: 'options' },
+    s.options.map((o) => {
+      const disabledReason =
+        o.key === 'claude' && !s.claudeTokenSet
+          ? 'aucun jeton Claude (Réglages)'
+          : o.key === 'forum' && !s.forumReady
+            ? 'clé du forum non réglée (Réglages)'
+            : null;
+      return h(
+        'label',
+        { class: 'check-line' },
+        h('input', {
+          type: 'checkbox',
+          checked: form.actions[o.key],
+          disabled: Boolean(disabledReason),
+          onchange: (e) => {
+            form.actions[o.key] = e.target.checked;
+          },
+        }),
+        ` ${o.label}`,
+        disabledReason ? h('span', { class: 'muted small' }, ` — ${disabledReason}`) : null,
+      );
+    }),
+  );
+
+  const simulateLocked = s.dryRun || !s.realLaunch;
+  const simulate = h(
+    'label',
+    { class: 'check-line' },
+    h('input', {
+      type: 'checkbox',
+      checked: true,
+      disabled: simulateLocked,
+      onchange: (e) => {
+        form.simulate = e.target.checked;
+      },
+    }),
+    ' Simulation : dérouler toutes les étapes sans rien créer',
+    simulateLocked
+      ? h(
+          'span',
+          { class: 'muted small' },
+          s.dryRun ? ' — imposée (DRY_RUN=true)' : ' — imposée : le lancement réel arrive à la phase 3',
+        )
+      : null,
+  );
+
+  const formError = h('div');
+  const submit = h('button', { class: 'button button-primary', type: 'submit' }, 'Lancer');
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    submit.textContent = 'Lancement…';
+    formError.replaceChildren();
+    showErrors();
+    try {
+      const launch = await api('launches', {
+        method: 'POST',
+        body: {
+          ideaKey: key || null,
+          displayName: form.displayName,
+          repoName: form.repoName,
+          description: form.description,
+          categories: [...form.categories],
+          keywords: form.keywords,
+          spec: form.spec,
+          actions: form.actions,
+          simulate: form.simulate,
+        },
+      });
+      state.dashboard = null; // reservations may have changed
+      location.hash = `#/suivi/${launch.id}`;
+    } catch (err) {
+      showErrors(err.details);
+      formError.replaceChildren(errorBox(err.message));
+      submit.disabled = false;
+      submit.textContent = 'Lancer';
+    }
+  };
+
+  setView(
+    h('p', {}, h('a', { href: '#/' }, '← Tableau de bord')),
+    h('h1', {}, `Lancer ${prefill.displayName || 'une intégration'}`),
+    prefill.idea?.description ? h('p', { class: 'muted' }, prefill.idea.description) : null,
+    h(
+      'form',
+      { class: 'launch-form', onsubmit: onSubmit, novalidate: true },
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'Nom'),
+        field('Nom affiché dans Gladys', nameInput, { error: errorEl('displayName') }),
+        field('Nom du dépôt GitHub', repoInput, {
+          hint: 'Préfixe gladys- + nom, modifiable.',
+          error: errorEl('repoName'),
+        }),
+        preview,
+        checkBox,
+      ),
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'Description du store (10 à 100 caractères)'),
+        descFields,
+        copyEnglish,
+      ),
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, h('span', {}, 'Catégories (1 à 3) '), catCount),
+        categories,
+        errorEl('categories'),
+      ),
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'Mots-clés et cahier des charges'),
+        field(
+          'Mots-clés (séparés par des virgules)',
+          h('input', {
+            type: 'text',
+            value: form.keywords,
+            oninput: (e) => {
+              form.keywords = e.target.value;
+            },
+          }),
+          {
+            hint: `Avec des mots-clés, le manifeste demande Gladys ${s.keywordsMinGladys} minimum (règle du store).`,
+            error: errorEl('keywords'),
+          },
+        ),
+        field(
+          'Cahier des charges',
+          h('textarea', {
+            rows: 8,
+            placeholder: 'Ce que doit faire l’intégration : appareils, fonctions, API utilisée, limites…',
+            oninput: (e) => {
+              form.spec = e.target.value;
+            },
+          }),
+          { hint: 'Ajouté à CLAUDE.md (section « Objectif ») et à l’issue de suivi.', error: errorEl('spec') },
+        ),
+      ),
+      h('fieldset', {}, h('legend', {}, 'Actions automatiques'), options, simulate),
+      formError,
+      h('div', { class: 'form-actions' }, submit),
+    ),
+  );
+  renderPreview();
+  runCheck();
+}
+
+// --- follow screen ---------------------------------------------------------------------
+
+const follow = { integ: null, tab: 'lancement', open: new Set(), live: {} };
+
+function linkOrText(href, label, simulated) {
+  return simulated ? h('span', { class: 'muted', title: 'Simulation : n’existe pas' }, label) : extLink(href, label);
+}
+
+function renderStep(step, integ) {
+  const lines = step.status === 'running' ? (follow.live[step.id] ?? []) : step.log ?? [];
+  const busy = integ.status === 'running';
+  const detailsOpen = follow.open.has(step.id) || step.status === 'running';
+  const preview = step.data?.preview;
+  const checks = step.data?.checks;
+
+  const details = h(
+    'details',
+    { open: detailsOpen },
+    h(
+      'summary',
+      {
+        // Only a click by the user keeps a journal open across refreshes.
+        onclick: (e) => {
+          if (e.currentTarget.parentElement.open) follow.open.delete(step.id);
+          else follow.open.add(step.id);
+        },
+      },
+      `Journal (${lines.length})`,
+    ),
+    checks ? renderChecks(checks) : null,
+    h(
+      'pre',
+      { class: 'log', dataset: { log: step.id } },
+      lines.map((l) => h('span', { class: `log-${l.level}` }, `${new Date(l.t).toLocaleTimeString('fr-FR')}  ${l.message}\n`)),
+    ),
+    preview
+      ? h(
+          'div',
+          { class: 'files' },
+          h('p', { class: 'small muted' }, 'Fichiers qui seraient écrits :'),
+          Object.entries(preview).map(([path, content]) =>
+            h('details', { class: 'file' }, h('summary', {}, path), h('pre', { class: 'log' }, content)),
+          ),
+        )
+      : null,
+  );
+
+  return h(
+    'li',
+    { class: `step step-${step.status}` },
+    h(
+      'div',
+      { class: 'step-head' },
+      statusBadge(step.status),
+      h('strong', {}, step.title),
+      step.essential ? h('span', { class: 'badge', title: 'Une erreur ici arrête le lancement' }, 'essentielle') : null,
+      h('span', { class: 'spacer' }),
+      h(
+        'button',
+        {
+          class: 'button small',
+          type: 'button',
+          disabled: busy || step.status === 'todo',
+          onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              await api(`launches/${integ.id}/steps/${step.id}/retry`, { method: 'POST' });
+            } catch (err) {
+              alert(err.message);
+              e.target.disabled = false;
+            }
+          },
+        },
+        'Relancer',
+      ),
+    ),
+    step.message ? h('p', { class: 'step-msg' }, step.message) : null,
+    step.status !== 'todo' && (lines.length || preview || checks) ? details : null,
+  );
+}
+
+function renderFollow() {
+  const integ = follow.integ;
+  if (!integ) return;
+  const sim = Boolean(integ.simulate);
+  const links = integ.links ?? {};
+  const linkItems = [
+    links.repo && linkOrText(links.repo, 'Dépôt', sim),
+    links.issue && linkOrText(links.issue, 'Issue de suivi', sim),
+    links.actions && linkOrText(links.actions, 'Actions', sim),
+    links.codespaces && linkOrText(links.codespaces, 'Ouvrir dans Codespaces', sim),
+    links.forum && linkOrText(links.forum, 'Sujet du forum', sim),
+  ].filter(Boolean);
+
+  const tabs = h(
+    'nav',
+    { class: 'tabs', 'aria-label': 'Onglets' },
+    h('a', { href: `#/suivi/${integ.id}`, 'aria-current': follow.tab === 'lancement' ? 'page' : null }, 'Lancement'),
+    h('a', { href: `#/suivi/${integ.id}/dev`, 'aria-current': follow.tab === 'dev' ? 'page' : null }, 'Développement'),
+  );
+
+  const body =
+    follow.tab === 'dev'
+      ? h('p', { class: 'muted' }, 'Le suivi en direct du développement (Claude, commits, PR, CI) arrive à la phase 4.')
+      : [
+          h('ol', { class: 'steps' }, integ.stepList.map((step) => renderStep(step, integ))),
+          h(
+            'div',
+            { class: 'form-actions' },
+            h('button', { class: 'button', type: 'button', disabled: true, title: 'Arrive à la phase 5' }, 'Publier'),
+          ),
+        ];
+
+  setView(
+    h('p', {}, h('a', { href: '#/mes-integrations' }, '← Mes intégrations')),
+    h(
+      'div',
+      { class: 'follow-head' },
+      h('h1', {}, integ.displayName),
+      statusBadge(integ.status, OVERALL_LABELS),
+      sim ? h('span', { class: 'badge badge-warn' }, 'Simulation') : null,
+    ),
+    h('p', { class: 'muted' }, h('code', {}, `${integ.owner}/${integ.repoName}`), ` · lancé le ${formatDate(integ.createdAt)}`),
+    linkItems.length ? h('p', { class: 'links' }, linkItems) : null,
+    sim && linkItems.length ? h('p', { class: 'muted small' }, 'Simulation : ces liens ne mènent nulle part.') : null,
+    tabs,
+    body,
+  );
+}
+
+async function showFollow(id, tab) {
+  closeStream();
+  if (follow.integ?.id !== id) {
+    follow.open = new Set();
+    follow.live = {};
+    follow.integ = null;
+    setView(loading());
+  }
+  follow.tab = tab === 'dev' ? 'dev' : 'lancement';
+  try {
+    follow.integ = await api(`launches/${encodeURIComponent(id)}`);
+  } catch (err) {
+    setView(errorBox(err.message), h('a', { class: 'button', href: '#/mes-integrations' }, 'Mes intégrations'));
+    return;
+  }
+  renderFollow();
+
+  stream = new EventSource(`api/launches/${encodeURIComponent(id)}/events`);
+  stream.addEventListener('launch', (e) => {
+    follow.integ = JSON.parse(e.data);
+    for (const step of follow.integ.stepList) if (step.status !== 'running') delete follow.live[step.id];
+    renderFollow();
+  });
+  stream.addEventListener('log', (e) => {
+    const entry = JSON.parse(e.data);
+    (follow.live[entry.step] ??= []).push(entry);
+    const pre = document.querySelector(`pre[data-log="${CSS.escape(entry.step)}"]`);
+    if (pre) {
+      pre.append(
+        h('span', { class: `log-${entry.level}` }, `${new Date(entry.t).toLocaleTimeString('fr-FR')}  ${entry.message}\n`),
+      );
+    } else {
+      renderFollow();
+    }
+  });
+}
+
+// --- my integrations ---------------------------------------------------------------------
+
+async function showMine() {
+  closeStream();
+  setView(h('h1', {}, 'Mes intégrations'), loading());
+  let list;
+  try {
+    list = await api('launches');
+  } catch (err) {
+    setView(h('h1', {}, 'Mes intégrations'), errorBox(err.message));
+    return;
+  }
+  const rows = list.map((integ) =>
+    h(
+      'li',
+      { class: 'mine-item' },
+      h(
+        'div',
+        { class: 'mine-main' },
+        h('a', { href: `#/suivi/${integ.id}`, class: 'mine-name' }, integ.displayName),
+        h('span', { class: 'muted small' }, `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}`),
+      ),
+      statusBadge(integ.status, OVERALL_LABELS),
+      integ.simulate ? h('span', { class: 'badge badge-warn' }, 'Simulation') : null,
+      integ.simulate
+        ? h(
+            'button',
+            {
+              class: 'button small',
+              type: 'button',
+              onclick: async () => {
+                if (!confirm(`Oublier la simulation « ${integ.displayName} » ?`)) return;
+                try {
+                  await api(`launches/${integ.id}`, { method: 'DELETE' });
+                  showMine();
+                } catch (err) {
+                  alert(err.message);
+                }
+              },
+            },
+            'Oublier',
+          )
+        : null,
+    ),
+  );
+  setView(
+    h('h1', {}, 'Mes intégrations'),
+    rows.length
+      ? h('ul', { class: 'mine' }, rows)
+      : h('p', { class: 'muted' }, 'Aucune intégration lancée pour l’instant. Choisissez une idée libre dans le ', h('a', { href: '#/' }, 'tableau de bord'), '.'),
+  );
+}
+
+// --- settings ------------------------------------------------------------------------------
+
+function secretField(label, name, isSet, hint, values) {
+  const input = h('input', {
+    type: 'password',
+    autocomplete: 'off',
+    placeholder: isSet ? 'Réglée : laissez vide pour la garder' : 'Non réglée',
+    oninput: (e) => {
+      values[name] = e.target.value;
+    },
+  });
+  const clear = h(
+    'button',
+    {
+      class: 'button small',
+      type: 'button',
+      disabled: !isSet,
+      onclick: () => {
+        values[name] = null;
+        input.value = '';
+        input.placeholder = 'Sera effacée à l’enregistrement';
+      },
+    },
+    'Effacer',
+  );
+  return field(h('span', {}, `${label} `, h('span', { class: `badge ${isSet ? 'st-done' : ''}` }, isSet ? 'réglée' : 'non réglée')), h('span', { class: 'row' }, input, clear), { hint });
+}
+
+async function showSettings() {
+  closeStream();
+  setView(h('h1', {}, 'Réglages'), loading());
+  let settings;
+  try {
+    settings = await api('settings');
+  } catch (err) {
+    setView(h('h1', {}, 'Réglages'), errorBox(err.message));
+    return;
+  }
+  const s = state.status;
+  const values = {};
+  const text = (name, props = {}) =>
+    h('input', {
+      type: 'text',
+      value: settings[name] ?? '',
+      oninput: (e) => {
+        values[name] = e.target.value;
+      },
+      ...props,
+    });
+  const message = h('div');
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    message.replaceChildren();
+    try {
+      await api('settings', { method: 'PUT', body: values });
+      state.status = await api('status');
+      showSettings();
+    } catch (err) {
+      message.replaceChildren(errorBox(err.message));
+    }
+  };
+
   setView(
     h('h1', {}, 'Réglages'),
     h(
       'dl',
       { class: 'facts' },
       h('dt', {}, 'Version'),
-      h('dd', {}, s?.version ?? '?'),
-      h('dt', {}, 'Jeton GitHub'),
-      h('dd', {}, s?.githubTokenSet ? 'Réglé' : 'Non réglé'),
-      h('dt', {}, 'Mode simulation'),
-      h('dd', {}, s?.dryRun ? 'Oui' : 'Non'),
+      h('dd', {}, s.version),
+      h('dt', {}, 'Jeton GitHub (.env)'),
+      h('dd', {}, s.githubTokenSet ? 'Réglé (le test des droits arrive à la phase 3)' : 'Non réglé : ajoutez GITHUB_TOKEN dans .env'),
+      h('dt', {}, 'Mode simulation (DRY_RUN)'),
+      h('dd', {}, s.dryRun ? 'Oui' : 'Non'),
       h('dt', {}, 'Cache des sources'),
-      h('dd', {}, `${s?.cacheMinutes ?? '?'} min`),
+      h('dd', {}, `${s.cacheMinutes} min`),
+    ),
+    h(
+      'form',
+      { class: 'launch-form', onsubmit: onSubmit },
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'GitHub'),
+        field('Compte ou organisation cible', text('owner', { placeholder: s.owner ? `${s.owner} (propriétaire du jeton)` : 'ex. mon-compte' }), {
+          hint: 'Vide = le compte du jeton GitHub.',
+        }),
+        field('Topics en plus', text('extraTopics', { placeholder: 'ex. domotique, zigbee' }), {
+          hint: 'Ajoutés aux dépôts, en plus de gladys-integration-wip.',
+        }),
+      ),
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'Claude (abonnement Pro ou Max)'),
+        secretField('Jeton Claude', 'claudeToken', settings.claudeTokenSet, 'Créé avec « claude setup-token ». Jamais réaffiché.', values),
+        field(
+          'Nombre de tours maximum par exécution',
+          h('input', {
+            type: 'number',
+            min: 1,
+            max: 200,
+            value: settings.claudeMaxTurns ?? '',
+            placeholder: '40',
+            oninput: (e) => {
+              values.claudeMaxTurns = e.target.value;
+            },
+          }),
+          { hint: 'Pour ménager les limites de l’abonnement.' },
+        ),
+      ),
+      h(
+        'fieldset',
+        {},
+        h('legend', {}, 'Forum Gladys (Discourse)'),
+        field('Nom d’utilisateur', text('forumUsername')),
+        field('Identifiant de la catégorie', text('forumCategoryId', { inputmode: 'numeric' }), {
+          hint: 'Catégorie où créer les sujets « Intégration externe - … ».',
+        }),
+        secretField('Clé API du forum', 'forumApiKey', settings.forumApiKeySet, 'Jamais réaffichée.', values),
+      ),
+      message,
+      h('div', { class: 'form-actions' }, h('button', { class: 'button button-primary', type: 'submit' }, 'Enregistrer')),
     ),
   );
 }
@@ -335,11 +1091,19 @@ function showSettings() {
 function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [page, ...rest] = hash.split('/');
-  const nav = { '': 'dashboard', 'mes-integrations': 'mine', reglages: 'settings', lancer: 'dashboard' }[page];
+  const nav = {
+    '': 'dashboard',
+    lancer: 'dashboard',
+    'mes-integrations': 'mine',
+    suivi: 'mine',
+    reglages: 'settings',
+  }[page];
   document.querySelectorAll('[data-nav]').forEach((a) => {
     a.toggleAttribute('aria-current', a.dataset.nav === nav);
   });
+  if (page !== 'suivi') closeStream();
   if (page === 'lancer') return showLaunch(decodeURIComponent(rest.join('/')));
+  if (page === 'suivi') return showFollow(decodeURIComponent(rest[0] ?? ''), rest[1]);
   if (page === 'mes-integrations') return showMine();
   if (page === 'reglages') return showSettings();
   return showDashboard();
