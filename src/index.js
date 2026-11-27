@@ -25,7 +25,7 @@ await app.runner.recover();
 
 app.server.listen(config.port, config.host, () => {
   log.info(
-    `Integration Creator à l'écoute sur ${config.host}:${config.port}${config.basePath || ''}/` +
+    `External Integration Creator à l'écoute sur ${config.host}:${config.port}${config.basePath || ''}/` +
       `${config.dryRun ? ' (mode simulation)' : ''}${config.appPassword ? ' (mot de passe actif)' : ''}`,
   );
 });

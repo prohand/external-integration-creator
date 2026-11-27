@@ -1,12 +1,12 @@
-# Integration Creator — one instance per person, with their own GitHub token.
+# External Integration Creator — one instance per person, with their own GitHub token.
 #   cp .env.example .env   (then fill it in)
 #   mkdir -p data && sudo chown 1000:1000 data
 #   docker compose up -d --build
 services:
-  integration-creator:
+  external-integration-creator:
     build: .
-    image: integration-creator:latest
-    container_name: integration-creator
+    image: external-integration-creator:latest
+    container_name: external-integration-creator
     restart: unless-stopped
     env_file: .env
     ports:

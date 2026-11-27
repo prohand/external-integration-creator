@@ -3,7 +3,7 @@
 // readable errors. No personal data is ever sent in headers.
 // -----------------------------------------------------------------------------
 
-export const USER_AGENT = 'gladys-integration-creator';
+export const USER_AGENT = 'gladys-external-integration-creator';
 
 export class HttpError extends Error {
   constructor(message, { status, url, body } = {}) {

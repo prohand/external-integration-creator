@@ -277,7 +277,7 @@ jobs:
 
 export function storeCheckWorkflow({ checkout, setupNode }) {
   return `# -----------------------------------------------------------------------------
-# Gladys store admission checks, started by Integration Creator before a
+# Gladys store admission checks, started by External Integration Creator before a
 # release (the image check is skipped: the image does not exist yet).
 # -----------------------------------------------------------------------------
 name: Store check
@@ -362,7 +362,7 @@ ${String(spec ?? '').trim() || '_Pas de cahier des charges détaillé._'}
 ${ISSUE_CHECKLIST.map((item) => `- [ ] ${item}`).join('\n')}
 ${forumUrl ? `\nDiscussion sur le forum : ${forumUrl}\n` : ''}
 ---
-_Issue créée par Integration Creator._
+_Issue créée par External Integration Creator._
 `;
 }
 

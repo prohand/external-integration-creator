@@ -1,4 +1,4 @@
-# Integration Creator pour Gladys Assistant
+# External Integration Creator pour Gladys Assistant
 
 Petite application web, à héberger chez soi, pour la communauté [Gladys Assistant](https://gladysassistant.com) :
 
@@ -31,8 +31,8 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 Prérequis : Docker avec le plugin `docker compose`.
 
 ```bash
-git clone https://github.com/prohand/integration-creator.git
-cd integration-creator
+git clone https://github.com/prohand/external-integration-creator.git
+cd external-integration-creator
 
 cp .env.example .env
 nano .env                       # au minimum : GITHUB_TOKEN
@@ -78,7 +78,7 @@ L'appli utilise un jeton **fine-grained** (plus sûr qu'un jeton classique : les
 
 1. Sur GitHub, ouvrez **Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
 2. Cliquez sur **Generate new token**.
-3. **Token name** : par exemple `integration-creator`.
+3. **Token name** : par exemple `external-integration-creator`.
 4. **Expiration** : choisissez une durée (90 jours, par exemple). Vous referez un jeton à l'expiration.
 5. **Resource owner** : votre compte, ou l'organisation où les dépôts seront créés.
 6. **Repository access** : **All repositories**. C'est obligatoire : l'appli crée de nouveaux dépôts, qui ne peuvent pas être choisis à l'avance.
@@ -138,7 +138,7 @@ L'appli écoute sur un seul port (`PORT`, 3000 par défaut). Elle gère :
 ### Pangolin
 
 1. Dans Pangolin, créez une **ressource HTTP** (par exemple `creator.mondomaine.fr`).
-2. Cible : `http://<ip-du-serveur>:3000` (ou `http://integration-creator:3000` si Pangolin/Newt est sur le même réseau Docker).
+2. Cible : `http://<ip-du-serveur>:3000` (ou `http://external-integration-creator:3000` si Pangolin/Newt est sur le même réseau Docker).
 3. Laissez l'**authentification Pangolin** activée : seul vous accédez à l'appli. `APP_PASSWORD` peut alors rester vide.
 4. Pour servir l'appli dans un sous-chemin plutôt qu'un sous-domaine, réglez `BASE_PATH=/gladys-creator` et utilisez ce même chemin dans Pangolin.
 

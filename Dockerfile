@@ -1,4 +1,4 @@
-# Integration Creator — small image: node:22-alpine, non-root user, one
+# External Integration Creator — small image: node:22-alpine, non-root user, one
 # runtime dependency (libsodium-wrappers, added with the GitHub launch steps).
 FROM node:22-alpine
 

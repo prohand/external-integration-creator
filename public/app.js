@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Integration Creator — browser side. Plain JavaScript, no build step.
+// External Integration Creator — browser side. Plain JavaScript, no build step.
 // Every text coming from the tracker, the forum or GitHub is inserted with
 // textContent (see `h()`), never with innerHTML.
 // -----------------------------------------------------------------------------

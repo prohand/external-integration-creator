@@ -301,7 +301,7 @@ export function createApp({ config, db, hub = new Hub() }) {
         res,
         auth.status,
         { error: auth.status === 429 ? 'Trop de tentatives, réessayez plus tard.' : 'Authentification requise.' },
-        auth.status === 401 ? { 'www-authenticate': 'Basic realm="Integration Creator", charset="UTF-8"' } : {},
+        auth.status === 401 ? { 'www-authenticate': 'Basic realm="External Integration Creator", charset="UTF-8"' } : {},
       );
     }
 
