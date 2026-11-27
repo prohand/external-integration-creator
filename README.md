@@ -31,19 +31,20 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 
 ## Installation avec Docker
 
-Prérequis : Docker avec le plugin `docker compose`.
+Prérequis : Docker avec le plugin `docker compose`. L'image est publiée sur `ghcr.io/prohand/external-integration-creator`, pour `amd64` : pas besoin de cloner le dépôt. Sur une autre architecture (Raspberry Pi, par exemple), construisez l'image vous-même (voir plus bas).
 
 ```bash
-git clone https://github.com/prohand/external-integration-creator.git
-cd external-integration-creator
+mkdir external-integration-creator && cd external-integration-creator
 
-cp .env.example .env
+# les deux seuls fichiers nécessaires
+curl -fsSLO https://raw.githubusercontent.com/prohand/external-integration-creator/main/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/prohand/external-integration-creator/main/.env.example
 nano .env                       # au minimum : GITHUB_TOKEN
 
 mkdir -p data
 sudo chown 1000:1000 data       # l'appli tourne avec l'utilisateur "node" (uid 1000), pas root
 
-docker compose up -d --build
+docker compose up -d
 ```
 
 Ouvrez ensuite `http://<ip-du-serveur>:3000`.
@@ -69,9 +70,13 @@ Les réglages se trouvent dans `.env` (chaque ligne est commentée dans `.env.ex
 Mise à jour :
 
 ```bash
-git pull
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+Étiquettes de l'image : `latest` (dernière version de `main`), `X.Y.Z` et `X.Y` (versions publiées avec un tag `vX.Y.Z`).
+
+Construire l'image soi-même (pour modifier le code) : clonez le dépôt, décommentez `build: .` dans `docker-compose.yml`, puis `docker compose up -d --build`.
 
 ---
 
