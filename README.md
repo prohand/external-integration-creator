@@ -130,7 +130,15 @@ Pour ménager les limites de l'abonnement, chaque exécution de Claude est limit
 
 ## Connecter son compte du forum
 
-L'appli peut créer le sujet « Intégration externe - <Nom> » sur le [forum Gladys](https://community.gladysassistant.com) avec **votre propre compte**. Pas besoin d'une clé d'administrateur : l'appli demande au forum une clé personnelle (Discourse « User API Key »).
+Sur le forum Gladys, on n'ouvre **pas un sujet par intégration**. Les lancements s'annoncent **par lot**, dans [le sujet des intégrations candidates](https://community.gladysassistant.com/t/integrations-home-assistant-les-plus-populaires-candidates-pour-des-integrations-externes-gladys/10385), avec un message « Je prends : » qui liste les intégrations.
+
+L'appli fait pareil :
+
+- au lancement, l'intégration est mise de côté pour le **prochain lot** ;
+- dans **Mes intégrations**, le bloc « Annonces sur le forum » prépare le message « Je prends : » avec toutes les intégrations en attente. Vous choisissez lesquelles annoncer, vous relisez et modifiez le texte, puis vous cliquez sur **Poster sur le forum** (avec une confirmation) ;
+- avant chaque lancement, l'appli cherche aussi le nom dans ce sujet. S'il y est cité (un « Je prends » récent, par exemple), elle affiche les messages concernés pour que vous les lisiez.
+
+Pour poster, l'appli utilise **votre propre compte** du forum, avec une clé personnelle (Discourse « User API Key »). Pas besoin d'une clé d'administrateur :
 
 1. Page **Réglages → Forum Gladys** : cliquez sur **Connecter mon compte du forum**.
 2. Cliquez sur **Ouvrir le forum et autoriser**. Connectez-vous au forum si besoin, puis cliquez sur **Autoriser**.
@@ -143,7 +151,7 @@ Bon à savoir :
 - il n'y a pas d'adresse de retour : le code passe par copier-coller, rien n'a besoin d'être joignable depuis Internet ;
 - le code est chiffré : seule votre instance peut le lire ;
 - **Déconnecter** révoque la clé sur le forum. Vous pouvez aussi la révoquer depuis votre profil du forum (onglet **Applications**) ;
-- les sujets sont créés dans la catégorie **Development** par défaut, comme la plupart des sujets « Intégration externe » existants. Elle se change dans les Réglages.
+- le numéro du sujet se règle dans `config/repo-settings.json` (`forum.topic_id`).
 
 ## Derrière un reverse proxy (exemple Pangolin)
 
@@ -207,8 +215,8 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
    - remplissez la description en 4 langues (10 à 100 caractères chacune), 1 à 3 catégories, des mots-clés et le cahier des charges ;
    - cochez les actions automatiques voulues.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
-4. **Mes intégrations** : toutes vos intégrations lancées et leur état. Une simulation peut être oubliée.
-5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum et catégorie des sujets. Les clés ne sont jamais réaffichées.
+4. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
+5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.
 
 ## Mode simulation
 

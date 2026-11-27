@@ -23,7 +23,6 @@ export const SECRET_NAMES = ['claudeToken'];
 export const DEFAULT_SETTINGS = {
   owner: '',
   forumUsername: '',
-  forumCategoryId: '',
   claudeMaxTurns: null, // null = config/repo-settings.json (claude.max_turns)
   extraTopics: '',
 };
@@ -60,11 +59,6 @@ export function validateSettingsUpdate(body) {
       throw new ApiError(400, 'Compte ou organisation GitHub invalide.');
     }
     settings.owner = owner;
-  }
-  if (body.forumCategoryId !== undefined) {
-    const id = String(body.forumCategoryId).trim();
-    if (id && !/^\d+$/.test(id)) throw new ApiError(400, 'Identifiant de catégorie du forum invalide (un nombre).');
-    settings.forumCategoryId = id;
   }
   if (body.claudeMaxTurns !== undefined) {
     if (body.claudeMaxTurns === null || body.claudeMaxTurns === '') settings.claudeMaxTurns = null;

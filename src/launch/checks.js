@@ -28,9 +28,9 @@ async function safely(source, fn) {
 }
 
 /**
- * @param {object} target - { displayName, repoName, owner, ideaKey, ownRepo, ownForumTopicId }
+ * @param {object} target - { displayName, repoName, owner, ideaKey, ownRepo }
  *   ownRepo: the repository was created by this launch (it may exist).
- * @param {object} deps - { board(), storeIndex(), forumSearch(term), github }
+ * @param {object} deps - { board(), storeIndex(), forumSearch(term), forumMentions(term), github }
  */
 export async function checkName(target, deps) {
   const { displayName, repoName, owner, ideaKey } = target;
@@ -64,11 +64,22 @@ export async function checkName(target, deps) {
     }),
 
     safely('forum', async () => {
-      const topics = await deps.forumSearch(displayName);
-      const hit = topics.find((t) => t.id !== target.ownForumTopicId && sameName(t.name));
-      return hit
-        ? result('forum', false, `Sujet existant : « ${hit.title} »`, hit.url)
-        : result('forum', true, 'Aucun sujet « Intégration externe » à ce nom');
+      const [topics, mentions] = await Promise.all([
+        deps.forumSearch(displayName),
+        deps.forumMentions ? deps.forumMentions(displayName) : [],
+      ]);
+      const hit = topics.find((t) => sameName(t.name));
+      if (hit) return result('forum', false, `Sujet existant : « ${hit.title} »`, hit.url);
+      const check = result('forum', true, 'Aucun sujet « Intégration externe » à ce nom');
+      // Mentions in the community topic: maybe a "Je prends", to read.
+      if (mentions.length) {
+        check.notes = mentions.slice(0, 3).map((m) => ({
+          text: `Citée au n° ${m.postNumber} par ${m.username}${m.createdAt ? ` (${m.createdAt.slice(0, 10)})` : ''} : ${m.excerpt}`,
+          link: m.url,
+        }));
+        check.message = `Aucun sujet à ce nom, mais citée ${mentions.length} fois dans le sujet des intégrations : à vérifier`;
+      }
+      return check;
     }),
 
     safely('github', async () => {
@@ -84,6 +95,7 @@ export async function checkName(target, deps) {
     checks,
     conflicts: checks.filter((c) => c.ok === false).length,
     unknown: checks.filter((c) => c.ok === null).length,
+    mentions: checks.reduce((n, c) => n + (c.notes?.length ?? 0), 0),
     free: checks.every((c) => c.ok === true),
   };
 }

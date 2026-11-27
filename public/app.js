@@ -370,6 +370,13 @@ function renderChecks(checks) {
         ' ',
         h('span', {}, c.message),
         c.link ? [' ', extLink(c.link, 'voir')] : null,
+        c.notes?.length
+          ? h(
+              'ul',
+              { class: 'check-notes' },
+              c.notes.map((n) => h('li', { class: 'small' }, n.text, ' ', n.link ? extLink(n.link, 'lire') : null)),
+            )
+          : null,
       ),
     ),
   );
@@ -418,7 +425,6 @@ async function showLaunch(key) {
     simulate: true,
   };
   if (!s.claudeTokenSet) form.actions.claude = false;
-  if (!s.forumReady) form.actions.forum = false;
 
   const errors = {};
   const errorEl = (name) => {
@@ -469,12 +475,20 @@ async function showLaunch(key) {
       checkBox.replaceChildren(
         h(
           'p',
-          { class: report.conflicts ? 'alert alert-error' : report.unknown ? 'alert alert-warn' : 'alert alert-ok' },
+          {
+            class: report.conflicts
+              ? 'alert alert-error'
+              : report.unknown || report.mentions
+                ? 'alert alert-warn'
+                : 'alert alert-ok',
+          },
           report.conflicts
             ? 'Ce nom est déjà pris.'
             : report.unknown
               ? 'Nom libre, mais une source n’a pas pu être vérifiée.'
-              : 'Nom libre partout.',
+              : report.mentions
+                ? 'Nom libre, mais cité sur le forum : lisez ces messages avant de lancer (quelqu’un l’a peut-être pris).'
+                : 'Nom libre partout.',
         ),
         renderChecks(report.checks),
       );
@@ -589,11 +603,7 @@ async function showLaunch(key) {
     { class: 'options' },
     s.options.map((o) => {
       const disabledReason =
-        o.key === 'claude' && !s.claudeTokenSet
-          ? 'aucun jeton Claude (Réglages)'
-          : o.key === 'forum' && !s.forumReady
-            ? 'clé du forum non réglée (Réglages)'
-            : null;
+        o.key === 'claude' && !s.claudeTokenSet ? 'aucun jeton Claude (Réglages)' : null;
       return h(
         'label',
         { class: 'check-line' },
@@ -953,9 +963,99 @@ async function showMine() {
   );
   setView(
     h('h1', {}, 'Mes intégrations'),
+    h('div', { id: 'forum-batch' }),
     rows.length
       ? h('ul', { class: 'mine' }, rows)
       : h('p', { class: 'muted' }, 'Aucune intégration lancée pour l’instant. Choisissez une idée libre dans le ', h('a', { href: '#/' }, 'tableau de bord'), '.'),
+  );
+  renderForumBatch();
+}
+
+/** "Je prends :" batch for the community topic, edited then posted on demand. */
+async function renderForumBatch() {
+  const host = document.getElementById('forum-batch');
+  if (!host) return;
+  let batch;
+  try {
+    batch = await api('forum/batch');
+  } catch (err) {
+    host.replaceChildren(errorBox(err.message));
+    return;
+  }
+  if (!batch.pending.length) {
+    host.replaceChildren();
+    return;
+  }
+  const chosen = new Set(batch.pending.map((p) => p.id));
+  const text = h('textarea', { rows: Math.min(14, 4 + batch.pending.length), spellcheck: 'true' });
+  text.value = batch.message;
+  const result = h('div');
+  const post = h(
+    'button',
+    {
+      class: 'button button-primary',
+      type: 'button',
+      disabled: !batch.connected,
+      onclick: async (e) => {
+        const count = chosen.size;
+        if (!count) return;
+        if (!confirm(`Poster ce message public dans le sujet des intégrations du forum Gladys (${count} intégration${count > 1 ? 's' : ''}) ?`)) return;
+        e.target.disabled = true;
+        try {
+          const done = await api('forum/batch', { method: 'POST', body: { ids: [...chosen], raw: text.value } });
+          if (done.simulated) {
+            result.replaceChildren(h('p', { class: 'alert alert-warn' }, 'Mode simulation : rien n’a été posté.'));
+            e.target.disabled = false;
+          } else {
+            showMine();
+          }
+        } catch (err) {
+          result.replaceChildren(errorBox(err.message));
+          e.target.disabled = false;
+        }
+      },
+    },
+    'Poster sur le forum',
+  );
+  host.replaceChildren(
+    h(
+      'section',
+      { class: 'batch' },
+      h('h2', {}, `Annonces sur le forum : ${batch.pending.length} intégration${batch.pending.length > 1 ? 's' : ''} à annoncer`),
+      h(
+        'p',
+        { class: 'muted small' },
+        'Comme les autres contributeurs, on annonce par lot dans ',
+        extLink(batch.topicUrl, 'le sujet des intégrations candidates'),
+        '. Relisez et modifiez le message avant de le poster.',
+      ),
+      h(
+        'div',
+        { class: 'options' },
+        batch.pending.map((p) =>
+          h(
+            'label',
+            { class: 'check-line' },
+            h('input', {
+              type: 'checkbox',
+              checked: true,
+              onchange: (e) => {
+                if (e.target.checked) chosen.add(p.id);
+                else chosen.delete(p.id);
+              },
+            }),
+            ` ${p.displayName} `,
+            h('span', { class: 'muted small' }, p.repo),
+          ),
+        ),
+      ),
+      text,
+      batch.connected
+        ? null
+        : h('p', { class: 'alert alert-warn' }, 'Connectez d’abord votre compte du forum dans ', h('a', { href: '#/reglages' }, 'Réglages'), '.'),
+      result,
+      h('div', { class: 'form-actions' }, post),
+    ),
   );
 }
 
@@ -1086,27 +1186,6 @@ function forumFieldset(settings, values) {
   const status = h('div');
   box.append(status);
 
-  const categorySelect = h(
-    'select',
-    {
-      onchange: (e) => {
-        values.forumCategoryId = e.target.value;
-      },
-    },
-    h('option', { value: settings.forumCategoryId || '' }, 'Chargement des catégories…'),
-  );
-  api('forum/categories').then(
-    ({ categories, defaultId }) => {
-      const current = settings.forumCategoryId || String(defaultId ?? '');
-      categorySelect.replaceChildren(
-        ...categories.map((c) => h('option', { value: String(c.id), selected: String(c.id) === current }, c.name)),
-      );
-    },
-    () => {
-      categorySelect.replaceChildren(h('option', { value: settings.forumCategoryId || '' }, 'Forum injoignable'));
-    },
-  );
-
   const refresh = async () => {
     state.status = await api('status');
     showSettings();
@@ -1199,9 +1278,12 @@ function forumFieldset(settings, values) {
   }
 
   box.append(
-    field('Catégorie des sujets « Intégration externe - … »', categorySelect, {
-      hint: 'Par défaut : Development, comme la plupart des sujets existants.',
-    }),
+    h(
+      'p',
+      { class: 'muted small' },
+      'Les lancements sont annoncés par lot, dans un seul message « Je prends : » du sujet des intégrations candidates. ' +
+        'Le message se prépare et se poste depuis « Mes intégrations ».',
+    ),
   );
   return box;
 }

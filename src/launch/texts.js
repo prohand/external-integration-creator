@@ -346,7 +346,7 @@ export function issueTitle(displayName) {
   return `Développement de l'intégration ${displayName}`;
 }
 
-export function issueBody({ displayName, description, spec, claude, forumUrl }) {
+export function issueBody({ displayName, description, spec, claude }) {
   const intro = claude
     ? "@claude Développe cette intégration Gladys en suivant le cahier des charges ci-dessous et les règles de `CLAUDE.md`. Travaille sur une branche, ouvre une pull request quand les tests passent, et coche la check-list au fur et à mesure.\n\n"
     : '';
@@ -361,22 +361,17 @@ ${String(spec ?? '').trim() || '_Pas de cahier des charges détaillé._'}
 ## Check-list jusqu'à la publication
 
 ${ISSUE_CHECKLIST.map((item) => `- [ ] ${item}`).join('\n')}
-${forumUrl ? `\nDiscussion sur le forum : ${forumUrl}\n` : ''}
+
 ---
 _Issue créée par External Integration Creator._
 `;
 }
 
-export function forumPost({ displayName, description, repoUrl }) {
-  return `Bonjour à tous,
-
-Je commence le développement d'une intégration externe pour **${mdInline(displayName)}**.
-
-> ${mdInline(description.fr)}
-
-- Dépôt GitHub : ${repoUrl}
-- Suivi du développement : ${repoUrl}/issues
-
-Le développement vient de démarrer. Vos idées, besoins et retours sont les bienvenus ici !
-`;
+/**
+ * "Je prends :" message, posted in batch in the community topic, like the
+ * other contributors do. One line per integration.
+ */
+export function reserveBatchMessage(items) {
+  const lines = items.map((i) => `- ${mdInline(i.displayName)} : ${mdInline(i.description.fr)}`);
+  return `Je prends :\n\n${lines.join('\n')}\n`;
 }

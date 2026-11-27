@@ -37,7 +37,7 @@
     { "name": "publication", "color": "0e8a16", "description": "Prêt pour le store Gladys" }
   ],
   "forum": {
-    "category_id": 33
+    "topic_id": 10385
   },
   "claude": {
     "max_turns": 40

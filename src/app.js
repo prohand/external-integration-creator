@@ -16,13 +16,15 @@ import { Runner, channelOf } from './launch/runner.js';
 import { OPTIONS, STEPS } from './launch/steps.js';
 import { validateLaunch } from './launch/validate.js';
 import {
+  createPost,
   currentUser,
   finishUserApiKey,
-  listCategories,
   revokeUserApiKey,
   searchIntegrationTopics,
+  searchTopicMentions,
   startUserApiKey,
 } from './sources/forum.js';
+import { reserveBatchMessage } from './launch/texts.js';
 import { fetchStoreIndex } from './sources/store.js';
 import { buildBoard, fetchTracker } from './sources/tracker.js';
 import { loadRepoSettings, publicSettings, saveSettings } from './settings.js';
@@ -88,7 +90,16 @@ export function createApp({ config, db, hub = new Hub() }) {
     store: (opts) => cache.get('store', () => fetchStoreIndex(config), opts),
     forum: (term) =>
       shortCache.get(`forum:${term.toLowerCase()}`, () => searchIntegrationTopics(config, term)),
+    mentions: (term) =>
+      shortCache.get(`mentions:${term.toLowerCase()}`, () =>
+        searchTopicMentions(config, forumTopicId(), term),
+      ),
   };
+
+  /** Community topic where launches are announced in batches. */
+  function forumTopicId() {
+    return loadRepoSettings().forum?.topic_id ?? 10385;
+  }
 
   async function board(opts) {
     const result = await sources.tracker(opts);
@@ -126,6 +137,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     board: async () => (await board()).board,
     storeIndex: async () => (await sources.store()).value,
     forumSearch: async (term) => (await sources.forum(term)).value,
+    forumMentions: async (term) => (await sources.mentions(term)).value,
     github,
   };
 
@@ -188,11 +200,6 @@ export function createApp({ config, db, hub = new Hub() }) {
   });
 
   // --- forum account (Discourse User API Key, copy/paste: no callback URL) ---
-  router.get('/api/forum/categories', async () => {
-    const { value } = await cache.get('forum:categories', () => listCategories(config));
-    return { categories: value, defaultId: loadRepoSettings().forum?.category_id ?? null };
-  });
-
   router.post('/api/forum/connect', async () => {
     const { pending, url } = startUserApiKey(config);
     await db.update((s) => {
@@ -235,6 +242,51 @@ export function createApp({ config, db, hub = new Hub() }) {
       s.settings.forumUsername = '';
     });
     return publicSettings(db.read());
+  });
+
+  // --- batched announcements ("Je prends :") in the community topic ---
+  const pendingAnnouncements = (state) =>
+    state.integrations.filter((i) => !i.simulate && i.forum?.queuedAt && !i.forum?.announced);
+
+  router.get('/api/forum/batch', () => {
+    const state = db.read();
+    const pending = pendingAnnouncements(state);
+    return {
+      pending: pending.map((i) => ({ id: i.id, displayName: i.displayName, repo: `${i.owner}/${i.repoName}` })),
+      message: pending.length ? reserveBatchMessage(pending) : '',
+      topicUrl: `${config.forumUrl}/t/${forumTopicId()}`,
+      connected: Boolean(state.secrets.forumUserApiKey),
+      dryRun: config.dryRun,
+    };
+  });
+
+  router.post('/api/forum/batch', async ({ body }) => {
+    const state = db.read();
+    const pending = pendingAnnouncements(state);
+    const ids = Array.isArray(body?.ids) ? body.ids : [];
+    const chosen = pending.filter((i) => ids.includes(i.id));
+    if (!chosen.length) throw new ApiError(400, 'Aucune intégration à annoncer.');
+    const raw = String(body?.raw ?? '').trim();
+    if (raw.length < 10 || raw.length > 20_000) throw new ApiError(400, 'Message vide ou trop long.');
+    if (!state.secrets.forumUserApiKey) throw new ApiError(400, 'Connectez d’abord votre compte du forum (Réglages).');
+    if (config.dryRun) return { simulated: true, count: chosen.length };
+
+    const post = await createPost(
+      config,
+      { key: state.secrets.forumUserApiKey, clientId: state.secrets.forumClientId },
+      { topicId: forumTopicId(), raw },
+    );
+    const announced = { postNumber: post.postNumber, url: post.url, at: new Date().toISOString() };
+    await db.update((s) => {
+      for (const integ of s.integrations) {
+        if (chosen.some((c) => c.id === integ.id)) {
+          integ.forum = { ...integ.forum, announced };
+          integ.links = { ...integ.links, forum: post.url };
+        }
+      }
+    });
+    shortCache.clear();
+    return { ...announced, count: chosen.length };
   });
 
   router.get('/api/prefill', async ({ query }) => {

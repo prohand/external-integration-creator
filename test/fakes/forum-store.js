@@ -3,13 +3,18 @@
 import { constants, publicEncrypt, randomBytes } from 'node:crypto';
 import { startFake } from './server.js';
 
-export async function startFakeForum({ topics = [], username = 'alice' } = {}) {
+export async function startFakeForum({ topics = [], posts = [], username = 'alice' } = {}) {
   const keys = new Map(); // user api key -> { username, clientId }
   const user = (headers) => keys.get(headers['user-api-key']);
   const fake = await startFake(({ method, path, query, headers, body }) => {
     if (method === 'GET' && path === '/search.json') {
       const q = (query.get('q') ?? '').toLowerCase();
-      const words = q.replace(/in:title/, '').split(/\s+/).filter(Boolean);
+      const topic = /topic:(\d+)/.exec(q)?.[1];
+      const words = q.replace(/in:title|topic:\d+/g, '').split(/\s+/).filter(Boolean);
+      if (topic) {
+        const posts = fake.posts.filter((p) => p.topic_id === Number(topic) && words.some((w) => p.raw.toLowerCase().includes(w)));
+        return { body: { posts: posts.map((p) => ({ ...p, blurb: p.raw.slice(0, 100) })), topics: [] } };
+      }
       const hits = fake.topics.filter((t) => words.some((w) => t.title.toLowerCase().includes(w)));
       return { body: { topics: hits } };
     }
@@ -36,6 +41,12 @@ export async function startFakeForum({ topics = [], username = 'alice' } = {}) {
     if (method === 'POST' && path === '/posts.json') {
       const u = user(headers);
       if (!u) return { status: 403, body: { errors: ['Clé invalide'] } };
+      if (body.topic_id) {
+        const number = 1 + fake.posts.filter((p) => p.topic_id === body.topic_id).length;
+        const post = { topic_id: body.topic_id, post_number: number, raw: body.raw, username: u.username, created_at: new Date().toISOString() };
+        fake.posts.push(post);
+        return { body: { ...post, topic_slug: 'integrations-candidates' } };
+      }
       const id = 1000 + fake.topics.length;
       const slug = body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       fake.topics.push({ id, title: body.title, slug, raw: body.raw, category: body.category, user: u.username });
@@ -44,6 +55,7 @@ export async function startFakeForum({ topics = [], username = 'alice' } = {}) {
     return undefined;
   });
   fake.topics = [...topics];
+  fake.posts = [...posts];
   fake.keys = keys;
 
   /**

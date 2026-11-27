@@ -25,13 +25,13 @@ test('a simulated launch runs every step and creates nothing', async () => {
     assert.equal(byId.customize.data.preview['package-lock.json'], undefined);
     assert.ok(byId['repo-settings'].log.some((l) => l.message === 'Simulation : PATCH /repos/alice/gladys-oral-b'));
     assert.match(byId['claude-secret'].message, /Simulation/);
-    assert.match(byId.forum.message, /Simulation : sujet « Intégration externe - Oral-B »/);
+    assert.match(byId.forum.message, /Simulation : serait ajoutée au prochain message « Je prends »/);
     assert.match(byId.issue.message, /Claude est sollicité/);
     assert.match(byId.reservation.message, /pas réservée/);
 
     // Nothing was written anywhere (the forum connection aside), no secret leaked.
     assert.equal(world.writes().length, writesBefore);
-    assert.match(byId.forum.log.at(-1).message, /catégorie 33/);
+    assert.equal((await world.call('GET', 'forum/batch')).body.pending.length, 0, 'simulations are never announced');
     const dash = (await world.call('GET', 'dashboard')).body;
     assert.ok(dash.columns.free.some((i) => i.key === 'idea:28'));
     assert.ok(!JSON.stringify(done).includes('sk-ant-oat01-secret-value'));
@@ -48,14 +48,14 @@ test('a simulated launch runs every step and creates nothing', async () => {
   }
 });
 
-test('steps tied to Claude or the forum are skipped without their keys', async () => {
+test('steps tied to Claude are skipped without a token, unchecked steps too', async () => {
   const world = await startWorld();
   try {
     const { body } = await world.call('POST', 'launches', { ...FORM, actions: { watch: false } });
     const done = await world.settle(body.id);
     const byId = Object.fromEntries(done.stepList.map((s) => [s.id, s]));
     assert.equal(byId['claude-secret'].status, 'skipped');
-    assert.equal(byId.forum.status, 'skipped');
+    assert.equal(byId.forum.status, 'done', 'queued for the next batch, the key is only needed to post');
     assert.equal(byId.watch.status, 'skipped');
     assert.match(byId.watch.message, /Désactivée/);
     assert.ok(!byId.customize.data.preview['.github/workflows/claude.yml'], 'no Claude workflow without a token');

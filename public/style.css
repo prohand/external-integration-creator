@@ -684,3 +684,32 @@ code {
 .mine-name {
   font-weight: 600;
 }
+
+/* --- forum batch -------------------------------------------------------------- */
+
+.batch {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem;
+  margin-bottom: 1rem;
+  max-width: 1000px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.batch h2 {
+  font-size: 1.05rem;
+}
+
+.batch p {
+  margin: 0;
+}
+
+.check-notes {
+  margin: 0.2rem 0 0 1.6rem;
+  padding: 0;
+  color: var(--muted);
+}

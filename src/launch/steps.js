@@ -11,8 +11,7 @@
 import { sealSecret } from '../crypto.js';
 import { checkName } from './checks.js';
 import { SOURCE_FILES, buildFiles, dockerImage } from './files.js';
-import { forumPost, issueBody, issueTitle } from './texts.js';
-import { createTopic, topicTitle } from '../sources/forum.js';
+import { issueBody, issueTitle } from './texts.js';
 import { parseTopics } from '../settings.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -44,7 +43,6 @@ async function stepCheckName(ctx) {
       repoName: integ.repoName,
       owner: integ.owner,
       ideaKey: integ.ideaKey,
-      ownForumTopicId: integ.forumTopicId,
     },
     ctx.deps,
   );
@@ -60,6 +58,13 @@ async function stepCheckName(ctx) {
       throw new Error('Impossible de vérifier GitHub : le dépôt pourrait déjà exister.');
     }
     return { status: 'warning', message: 'Nom libre, mais une source n’a pas pu être vérifiée.', data: report };
+  }
+  if (report.mentions) {
+    return {
+      status: 'warning',
+      message: 'Nom libre, mais cité dans le sujet des intégrations du forum : lisez ces messages (journal).',
+      data: report,
+    };
   }
   return { message: 'Nom libre partout (tracker, store, forum, GitHub).', data: report };
 }
@@ -319,34 +324,22 @@ async function stepClaudeSecret(ctx) {
   return { message: 'Secret CLAUDE_CODE_OAUTH_TOKEN enregistré (chiffré).' };
 }
 
-// --- 12. forum topic --------------------------------------------------------------------------
+// --- 12. forum announcement (batched) ------------------------------------------------------
+// No topic per integration: launches are announced together, in one
+// "Je prends :" reply of the community topic, from "Mes intégrations".
 
-async function stepForumTopic(ctx) {
+async function stepForumBatch(ctx) {
   const { integ } = ctx;
-  const auth = { key: ctx.secrets.forumUserApiKey, clientId: ctx.secrets.forumClientId };
-  if (!auth.key) {
-    return { status: 'skipped', message: 'Sautée : compte du forum non connecté (Réglages).' };
+  if (integ.forum?.announced) {
+    return { message: `Déjà annoncée sur le forum (message n° ${integ.forum.announced.postNumber}).` };
   }
-  if (integ.forumTopicId) return { message: `Sujet déjà créé : ${integ.links?.forum}` };
-
-  const title = topicTitle(integ.displayName);
-  const existing = await ctx.deps.forumSearch(integ.displayName);
-  const same = existing.find((t) => t.title.trim().toLowerCase() === title.toLowerCase());
-  if (same) throw new Error(`Un sujet « ${same.title} » existe déjà : ${same.url}`);
-
-  const categoryId = ctx.settings.forumCategoryId || ctx.repoSettings.forum?.category_id || null;
   if (ctx.dryRun) {
-    ctx.log(`Simulation : POST ${ctx.config.forumUrl}/posts.json « ${title} » (catégorie ${categoryId ?? 'par défaut'})`);
-    return { message: `Simulation : sujet « ${title} » créé.` };
+    return { message: 'Simulation : serait ajoutée au prochain message « Je prends » du forum.' };
   }
-  const topic = await createTopic(ctx.config, auth, {
-    categoryId,
-    title,
-    raw: forumPost({ ...integ, repoUrl: repoUrl(integ) }),
-  });
-  integ.forumTopicId = topic.id;
-  integ.links = { ...integ.links, forum: topic.url };
-  return { message: `Sujet créé : ${topic.url}` };
+  integ.forum = { ...integ.forum, queuedAt: integ.forum?.queuedAt ?? new Date().toISOString() };
+  return {
+    message: 'Ajoutée au prochain message « Je prends » : à poster depuis « Mes intégrations », avec les autres.',
+  };
 }
 
 // --- 13. tracking issue -----------------------------------------------------------------------
@@ -363,7 +356,7 @@ async function stepTrackingIssue(ctx) {
     `${repoPath(integ)}/issues`,
     {
       title: issueTitle(integ.displayName),
-      body: issueBody({ ...integ, claude, forumUrl: integ.links?.forum }),
+      body: issueBody({ ...integ, claude }),
       labels,
     },
     { simulate: () => ({ number: 1, html_url: `${repoUrl(integ)}/issues/1` }) },
@@ -413,7 +406,7 @@ export const STEPS = [
   { id: 'watch', title: 'Suivre le dépôt (Watch)', option: 'watch', run: stepWatch },
   { id: 'labels', title: 'Étiquettes', option: 'labels', run: stepLabels },
   { id: 'claude-secret', title: 'Secret Claude', option: 'claude', run: stepClaudeSecret },
-  { id: 'forum', title: 'Sujet sur le forum', option: 'forum', run: stepForumTopic },
+  { id: 'forum', title: 'Annonce sur le forum (par lot)', option: 'forum', run: stepForumBatch },
   { id: 'issue', title: 'Issue de suivi', option: 'issue', run: stepTrackingIssue },
   { id: 'reservation', title: 'Réservation locale', essential: true, run: stepReservation },
 ];
@@ -426,6 +419,6 @@ export const OPTIONS = [
   { key: 'watch', label: 'Suivre le dépôt (Watch)' },
   { key: 'labels', label: 'Créer les étiquettes claude, en cours, publication' },
   { key: 'claude', label: 'Confier le développement à Claude (workflow, secret, @claude)' },
-  { key: 'forum', label: 'Créer le sujet « Intégration externe » sur le forum' },
+  { key: 'forum', label: 'Annoncer sur le forum, dans le prochain message « Je prends » (par lot)' },
   { key: 'issue', label: 'Créer l’issue de suivi avec la check-list' },
 ];

@@ -1,6 +1,7 @@
 // -----------------------------------------------------------------------------
 // Gladys community forum (Discourse).
-// - Search for "Intégration externe - X" topics (public).
+// - Search for "Intégration externe - X" topics and for mentions in the
+//   community topic where launches are announced in batches (public).
 // - Each user connects their own account with a Discourse *User API Key*:
 //   the app makes an RSA key pair, the user approves on the forum, the forum
 //   shows an encrypted code, the user pastes it back here. No callback URL:
@@ -41,17 +42,25 @@ export async function searchIntegrationTopics(config, term) {
     .filter((t) => t.name);
 }
 
-/** Public categories (id, name), sub-categories included. */
-export async function listCategories(config) {
-  const data = await fetchJson(`${config.forumUrl}/categories.json?include_subcategories=true`, {
+/**
+ * Posts of the community topic (where launches are announced in batches)
+ * that mention `term`. The first post (the list of candidates) is ignored.
+ */
+export async function searchTopicMentions(config, topicId, term) {
+  const q = `${term} topic:${topicId}`;
+  const data = await fetchJson(`${config.forumUrl}/search.json?q=${encodeURIComponent(q)}`, {
     timeoutMs: config.httpTimeoutMs,
   });
-  const out = [];
-  for (const c of data?.category_list?.categories ?? []) {
-    out.push({ id: c.id, name: c.name });
-    for (const sub of c.subcategory_list ?? []) out.push({ id: sub.id, name: `${c.name} › ${sub.name}` });
-  }
-  return out;
+  return (data?.posts ?? [])
+    .filter((p) => p.topic_id === Number(topicId) && p.post_number > 1)
+    .map((p) => ({
+      postNumber: p.post_number,
+      username: p.username ?? '',
+      createdAt: p.created_at ?? null,
+      excerpt: String(p.blurb ?? '').slice(0, 160),
+      url: `${config.forumUrl}/t/${topicId}/${p.post_number}`,
+    }))
+    .sort((x, y) => y.postNumber - x.postNumber);
 }
 
 // --- User API Key -------------------------------------------------------------------
@@ -165,21 +174,21 @@ export async function revokeUserApiKey(config, auth) {
   });
 }
 
-/** Creates a topic with the user's key. Returns { id, url }. */
-export async function createTopic(config, auth, { categoryId, title, raw }) {
+/** Replies in a topic with the user's key. Returns { postNumber, url }. */
+export async function createPost(config, auth, { topicId, raw }) {
   const response = await httpRequest(`${config.forumUrl}/posts.json`, {
     method: 'POST',
     timeoutMs: config.httpTimeoutMs,
     headers: { ...userHeaders(auth), 'content-type': 'application/json' },
-    body: JSON.stringify({ title, raw, ...(categoryId ? { category: Number(categoryId) } : {}) }),
+    body: JSON.stringify({ topic_id: Number(topicId), raw }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const reason = Array.isArray(data?.errors) ? data.errors.join(', ') : `réponse ${response.status}`;
-    throw new Error(`Le forum a refusé la création du sujet : ${reason}`);
+    throw new Error(`Le forum a refusé le message : ${reason}`);
   }
   return {
-    id: data.topic_id,
-    url: `${config.forumUrl}/t/${data.topic_slug ?? 'topic'}/${data.topic_id}`,
+    postNumber: data.post_number,
+    url: `${config.forumUrl}/t/${data.topic_slug ?? 'topic'}/${data.topic_id ?? topicId}/${data.post_number}`,
   };
 }
