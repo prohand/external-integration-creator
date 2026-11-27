@@ -9,7 +9,7 @@ Petite application web, à héberger chez soi, pour la communauté [Gladys Assis
 
 Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'instance publique, et aucune donnée n'est partagée.
 
-> **État du projet** : phase 3 sur 5. Le tableau de bord, le lancement (en simulation et en réel) et les annonces sur le forum marchent. Le suivi en direct du développement par Claude et la publication arrivent dans les phases suivantes.
+> **État du projet** : phase 4 sur 5. Le tableau de bord, le lancement (en simulation et en réel), les annonces sur le forum et le suivi en direct du développement par Claude marchent. La publication arrive à la phase 5.
 
 ---
 
@@ -18,6 +18,7 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 - [Installation avec Docker](#installation-avec-docker)
 - [Créer le jeton GitHub](#créer-le-jeton-github)
 - [Jeton Claude (abonnement Pro ou Max)](#jeton-claude-abonnement-pro-ou-max)
+- [Suivre le développement en direct](#suivre-le-développement-en-direct)
 - [Connecter son compte du forum](#connecter-son-compte-du-forum)
 - [Derrière un reverse proxy (exemple Pangolin)](#derrière-un-reverse-proxy-exemple-pangolin)
 - [Sauvegarder /data](#sauvegarder-data)
@@ -135,6 +136,28 @@ Pour ménager les limites de l'abonnement, chaque exécution de Claude est limit
 
 ---
 
+## Suivre le développement en direct
+
+L'onglet **Développement** d'une intégration montre ce qui se passe dans le dépôt :
+
+- **le plan de Claude** : son commentaire de suivi dans l'issue, avec ses cases à cocher en check-list et une barre d'avancement ;
+- **l'exécution de Claude** (workflow `claude.yml`) : état, durée, étapes et lien vers la page de l'exécution ;
+- **les commits** de la branche de Claude et les fichiers modifiés (+/−) ;
+- **la pull request** : état, résultat de la CI et lien vers le diff. Le bouton **Ouvrir la PR** la crée avec votre jeton ;
+- **le fil d'activité** : démarrages, commits, résultats de la CI, messages envoyés.
+
+Les problèmes sont affichés en haut, avec un bouton **Relancer Claude** :
+
+- **limite d'abonnement atteinte** (lue dans le journal de l'exécution), avec l'heure de fin de la limite quand elle est connue ;
+- **tests en échec** dans la CI, avec le job et l'étape en cause. « Relancer Claude » lui envoie alors le lien de la CI et lui demande de corriger.
+
+Le champ **Écrire à Claude** poste un commentaire « @claude … » dans l'issue, avec des boutons rapides : « Explique ce que tu fais », « Ajoute des tests », « Fais plus simple », « Arrête-toi là et ouvre la PR ».
+
+Bon à savoir :
+
+- GitHub est relu **toutes les 20 secondes, seulement quand la page est ouverte** (`DEV_POLL_SECONDS`). Il n'y a pas de webhook : rien à ouvrir sur Internet. Les relectures sans changement ne comptent pas dans la limite d'appels GitHub (réponses 304) ;
+- les commits poussés par Claude (avec le jeton du workflow) ne déclenchent pas la CI tout seuls : l'appli lance la CI (`ci.yml`) sur chaque nouveau commit de la branche de Claude.
+
 ## Connecter son compte du forum
 
 Sur le forum Gladys, on n'ouvre **pas un sujet par intégration**. Les lancements s'annoncent **par lot**, dans [le sujet des intégrations candidates](https://community.gladysassistant.com/t/integrations-home-assistant-les-plus-populaires-candidates-pour-des-integrations-externes-gladys/10385), avec un message « Je prends : » qui liste les intégrations.
@@ -223,8 +246,9 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
    - cochez les actions automatiques voulues ;
    - décochez « Simulation » pour un vrai lancement : l'appli demande une confirmation avant de créer le dépôt public.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
-4. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
-5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.
+4. **Suivi, onglet Développement** : voir [Suivre le développement en direct](#suivre-le-développement-en-direct).
+5. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
+6. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.
 
 ## Mode simulation
 

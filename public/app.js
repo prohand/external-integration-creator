@@ -298,12 +298,21 @@ async function showDashboard() {
 // --- shared bits for the next screens ---------------------------------------------
 
 let stream = null; // EventSource of the follow screen
+let devStream = null; // EventSource of the "Développement" tab
+
+function closeDevStream() {
+  if (devStream) {
+    devStream.close();
+    devStream = null;
+  }
+}
 
 function closeStream() {
   if (stream) {
     stream.close();
     stream = null;
   }
+  closeDevStream();
 }
 
 function slugify(value) {
@@ -859,9 +868,12 @@ function renderFollow() {
     h('a', { href: `#/suivi/${integ.id}/dev`, 'aria-current': follow.tab === 'dev' ? 'page' : null }, 'Développement'),
   );
 
+  if (follow.tab === 'dev') openDevStream(integ.id);
+  else closeDevStream();
+
   const body =
     follow.tab === 'dev'
-      ? h('p', { class: 'muted' }, 'Le suivi en direct du développement (Claude, commits, PR, CI) arrive à la phase 4.')
+      ? renderDev()
       : [
           h('ol', { class: 'steps' }, integ.stepList.map((step) => renderStep(step, integ))),
           h(
@@ -888,12 +900,335 @@ function renderFollow() {
   );
 }
 
+// --- "Développement" tab ---------------------------------------------------------------
+
+const QUICK_MESSAGES = [
+  'Explique ce que tu fais',
+  'Ajoute des tests',
+  'Fais plus simple',
+  'Arrête-toi là et ouvre la PR',
+];
+
+const RUN_LABELS = {
+  queued: 'En attente',
+  in_progress: 'En cours',
+  completed: 'Terminée',
+  requested: 'Demandée',
+  waiting: 'En attente',
+  none: 'Pas encore lancée',
+};
+
+const CONCLUSIONS = {
+  failure: 'Échec',
+  cancelled: 'Annulée',
+  timed_out: 'Délai dépassé',
+  action_required: 'Action requise',
+  startup_failure: 'Échec au démarrage',
+  skipped: 'Sautée',
+  neutral: 'Neutre',
+};
+
+function fmtDuration(ms) {
+  if (ms === null || ms === undefined) return '';
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+}
+
+function fmtTime(iso) {
+  return iso ? new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+}
+
+function runBadge(run) {
+  if (!run) return h('span', { class: 'badge' }, 'Aucune');
+  if (run.status !== 'completed') return h('span', { class: 'badge st st-running' }, RUN_LABELS[run.status] ?? run.status);
+  const ok = run.conclusion === 'success';
+  return h('span', { class: `badge st ${ok ? 'st-done' : 'st-error'}` }, ok ? 'Réussie' : (CONCLUSIONS[run.conclusion] ?? run.conclusion));
+}
+
+function card(title, ...children) {
+  return h('section', { class: 'dev-card' }, h('h2', {}, title), ...children);
+}
+
+async function devAction(path, body, button) {
+  if (button) button.disabled = true;
+  try {
+    const res = await api(`launches/${follow.integ.id}/dev/${path}`, { method: 'POST', body });
+    if (res.simulated) alert('Mode simulation (DRY_RUN) : rien n’a été envoyé.');
+    return res;
+  } catch (err) {
+    alert(err.message);
+    return null;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+/** Message box: created once, so a draft survives the live refreshes. */
+function composeCard() {
+  if (follow.compose) return follow.compose;
+  const text = h('textarea', { rows: 3, placeholder: 'Votre message à Claude (posté dans l’issue avec @claude)' });
+  const send = h(
+    'button',
+    {
+      class: 'button button-primary',
+      type: 'button',
+      onclick: async (e) => {
+        if (!text.value.trim()) return;
+        const res = await devAction('message', { text: text.value }, e.currentTarget);
+        if (res && !res.simulated) {
+          text.value = '';
+          sent.textContent = 'Message posté. Claude démarre dans quelques secondes.';
+        }
+      },
+    },
+    'Envoyer',
+  );
+  const sent = h('p', { class: 'small muted' });
+  follow.compose = card(
+    'Écrire à Claude',
+    h(
+      'div',
+      { class: 'quick' },
+      QUICK_MESSAGES.map((m) =>
+        h(
+          'button',
+          {
+            class: 'button small',
+            type: 'button',
+            onclick: () => {
+              text.value = m;
+              text.focus();
+            },
+          },
+          m,
+        ),
+      ),
+    ),
+    text,
+    h('div', { class: 'form-actions' }, send),
+    sent,
+  );
+  return follow.compose;
+}
+
+function renderDev() {
+  follow.devEl ??= h('div', { class: 'dev' });
+  const el = follow.devEl;
+  const snap = follow.dev;
+  if (!snap) {
+    el.replaceChildren(follow.devError ? errorBox(follow.devError) : loading('Lecture de GitHub…'));
+    return el;
+  }
+  if (snap.simulated) {
+    el.replaceChildren(h('p', { class: 'muted' }, 'Simulation : il n’y a pas de développement réel à suivre.'));
+    return el;
+  }
+
+  const alerts = snap.alerts.map((a) =>
+    h(
+      'div',
+      { class: `alert ${a.kind === 'limit' ? 'alert-warn' : 'alert-error'} dev-alert` },
+      h('strong', {}, a.kind === 'limit' ? 'Limite d’abonnement' : a.kind === 'tests' ? 'Tests en échec' : 'Claude s’est arrêté'),
+      ' ',
+      a.message,
+      ' ',
+      a.url ? extLink(a.url, 'Voir l’exécution') : null,
+      snap.claudeEnabled && snap.issue
+        ? h(
+            'div',
+            {},
+            h(
+              'button',
+              {
+                class: 'button button-primary small',
+                type: 'button',
+                title: a.kind === 'limit' ? 'À utiliser une fois la limite levée' : null,
+                onclick: (e) => devAction('retry', {}, e.currentTarget),
+              },
+              'Relancer Claude',
+            ),
+          )
+        : null,
+    ),
+  );
+
+  const plan = snap.plan
+    ? card(
+        'Plan de Claude',
+        h(
+          'p',
+          {},
+          h('span', { class: `badge st ${snap.plan.state === 'finished' ? 'st-done' : snap.plan.state === 'error' ? 'st-error' : 'st-running'}` },
+            snap.plan.state === 'finished' ? 'Terminé' : snap.plan.state === 'error' ? 'Erreur' : 'En cours'),
+          snap.plan.total ? ` ${snap.plan.done} / ${snap.plan.total} fait` : '',
+          ' · ',
+          extLink(snap.plan.url, 'voir le commentaire'),
+        ),
+        snap.plan.total
+          ? h('progress', { max: snap.plan.total, value: snap.plan.done, 'aria-label': 'Avancement du plan' })
+          : null,
+        h(
+          'ul',
+          { class: 'todo' },
+          snap.plan.items.map((i) =>
+            h('li', { class: i.done ? 'done' : '' }, h('input', { type: 'checkbox', checked: i.done, disabled: true }), ` ${i.text}`),
+          ),
+        ),
+      )
+    : card(
+        'Plan de Claude',
+        h(
+          'p',
+          { class: 'muted' },
+          snap.claudeEnabled
+            ? 'Pas encore de plan : Claude publie son commentaire de suivi dans l’issue au démarrage.'
+            : 'Claude n’est pas activé pour cette intégration (pas de jeton Claude au lancement).',
+        ),
+      );
+
+  const run = snap.claudeRun;
+  const runCard = card(
+    'Exécution de Claude',
+    run
+      ? [
+          h('p', {}, runBadge(run), ` ${fmtDuration(run.durationMs)} · `, extLink(run.url, 'voir sur GitHub')),
+          h(
+            'ul',
+            { class: 'checks' },
+            run.steps.map((st) =>
+              h(
+                'li',
+                { class: `check check-${st.conclusion === 'success' || st.conclusion === 'skipped' ? 'ok' : st.conclusion === 'failure' ? 'ko' : 'unknown'}` },
+                h('span', { class: 'check-icon', 'aria-hidden': 'true' }, st.status !== 'completed' ? '…' : st.conclusion === 'failure' ? '✗' : '✓'),
+                st.name,
+              ),
+            ),
+          ),
+        ]
+      : h('p', { class: 'muted' }, 'Aucune exécution de claude.yml pour l’instant.'),
+  );
+
+  const pr = snap.pr;
+  const ci = snap.ci;
+  const ciLine = ci
+    ? h(
+        'p',
+        {},
+        'CI : ',
+        ci.status === 'none'
+          ? h('span', { class: 'badge' }, 'pas encore lancée')
+          : ci.status === 'requested'
+            ? h('span', { class: 'badge st st-running' }, 'demandée')
+            : runBadge(ci),
+        ci.url ? [' ', extLink(ci.url, 'détail')] : null,
+      )
+    : null;
+  const prCard = card(
+    'Pull request',
+    pr
+      ? [
+          h('p', {}, h('strong', {}, `#${pr.number} `), pr.title, ' ', h('span', { class: `badge st ${pr.state === 'merged' ? 'st-done' : pr.state === 'open' ? 'st-running' : ''}` }, pr.state === 'merged' ? 'fusionnée' : pr.state === 'open' ? (pr.draft ? 'brouillon' : 'ouverte') : 'fermée')),
+          ciLine,
+          h('p', { class: 'links' }, extLink(pr.url, 'Ouvrir la PR'), extLink(pr.diffUrl, 'Voir le diff')),
+        ]
+      : [
+          h('p', { class: 'muted' }, snap.branch ? 'Pas encore de pull request pour cette branche.' : 'Pas encore de branche de travail.'),
+          ciLine,
+          snap.branch
+            ? h('button', { class: 'button small', type: 'button', onclick: (e) => devAction('pr', {}, e.currentTarget) }, 'Ouvrir la PR')
+            : null,
+        ],
+  );
+
+  const commitsCard = card(
+    'Commits et fichiers',
+    snap.branch ? h('p', { class: 'small' }, 'Branche ', h('code', {}, snap.branch)) : null,
+    snap.commits.length
+      ? h(
+          'ul',
+          { class: 'commits' },
+          snap.commits.map((c) =>
+            h('li', {}, extLink(c.url, h('code', {}, c.short)), ` ${c.message} `, h('span', { class: 'muted small' }, c.date ? formatDate(c.date) : '')),
+          ),
+        )
+      : h('p', { class: 'muted' }, 'Aucun commit sur une branche de travail.'),
+    snap.files.length
+      ? [
+          h('p', { class: 'small' }, `${snap.files.length} fichier${snap.files.length > 1 ? 's' : ''} · `, h('span', { class: 'plus' }, `+${snap.totals.additions}`), ' ', h('span', { class: 'minus' }, `−${snap.totals.deletions}`)),
+          h(
+            'ul',
+            { class: 'files-list' },
+            snap.files.map((f) =>
+              h('li', {}, h('code', {}, f.filename), ' ', h('span', { class: 'plus' }, `+${f.additions}`), ' ', h('span', { class: 'minus' }, `−${f.deletions}`)),
+            ),
+          ),
+        ]
+      : null,
+  );
+
+  const activityCard = card(
+    'Fil d’activité',
+    snap.activity.length
+      ? h(
+          'ul',
+          { class: 'activity' },
+          snap.activity.map((a) =>
+            h(
+              'li',
+              { class: `act act-${a.kind}` },
+              h('span', { class: 'muted small' }, formatDate(a.t)),
+              ' ',
+              a.url ? extLink(a.url, a.text) : a.text,
+            ),
+          ),
+        )
+      : h('p', { class: 'muted' }, 'Rien pour l’instant.'),
+  );
+
+  el.replaceChildren(
+    ...alerts,
+    ...(follow.devError ? [h('p', { class: 'alert alert-warn' }, `GitHub n’a pas répondu : ${follow.devError}`)] : []),
+    h(
+      'div',
+      { class: 'dev-grid' },
+      h('div', { class: 'dev-col' }, plan, runCard, snap.claudeEnabled && snap.issue ? composeCard() : null),
+      h('div', { class: 'dev-col' }, prCard, commitsCard, activityCard),
+    ),
+    h('p', { class: 'muted small', id: 'dev-stamp' }, `Mis à jour à ${fmtTime(snap.updatedAt)} · GitHub est relu toutes les 20 s, seulement quand cette page est ouverte.`),
+  );
+  return el;
+}
+
+function openDevStream(id) {
+  if (devStream) return;
+  devStream = new EventSource(`api/launches/${encodeURIComponent(id)}/dev/events`);
+  devStream.addEventListener('dev', (e) => {
+    follow.dev = JSON.parse(e.data);
+    follow.devError = null;
+    if (follow.tab === 'dev') renderDev();
+  });
+  devStream.addEventListener('dev-ping', (e) => {
+    const { updatedAt } = JSON.parse(e.data);
+    if (follow.dev) follow.dev.updatedAt = updatedAt;
+    const stamp = document.getElementById('dev-stamp');
+    if (stamp) stamp.firstChild.textContent = `Mis à jour à ${fmtTime(updatedAt)} · GitHub est relu toutes les 20 s, seulement quand cette page est ouverte.`;
+  });
+  devStream.addEventListener('dev-error', (e) => {
+    follow.devError = JSON.parse(e.data).message;
+    if (follow.tab === 'dev') renderDev();
+  });
+}
+
 async function showFollow(id, tab) {
   closeStream();
   if (follow.integ?.id !== id) {
     follow.open = new Set();
     follow.live = {};
     follow.integ = null;
+    follow.dev = null;
+    follow.devError = null;
+    follow.devEl = null;
+    follow.compose = null;
     setView(loading());
   }
   follow.tab = tab === 'dev' ? 'dev' : 'lancement';
@@ -905,6 +1240,7 @@ async function showFollow(id, tab) {
   }
   renderFollow();
 
+  if (stream) return;
   stream = new EventSource(`api/launches/${encodeURIComponent(id)}/events`);
   stream.addEventListener('launch', (e) => {
     follow.integ = JSON.parse(e.data);

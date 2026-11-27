@@ -1,6 +1,6 @@
 {
   "name": "gladys-external-integration-creator",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Find a free Gladys Assistant external integration idea, launch it in one click and follow its development live.",
   "license": "Apache-2.0",

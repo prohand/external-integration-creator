@@ -24,6 +24,7 @@ const DEFAULTS = {
   TEMPLATE_REPO: 'GladysAssistant/integration-template-js',
   BRANCH_WAIT_SECONDS: '90',
   BRANCH_POLL_MS: '2000',
+  DEV_POLL_SECONDS: '20',
 };
 
 function bool(value) {
@@ -87,5 +88,6 @@ export function loadConfig(env = process.env) {
     template: parseRepo('TEMPLATE_REPO', get('TEMPLATE_REPO')),
     branchWaitMs: positiveNumber('BRANCH_WAIT_SECONDS', get('BRANCH_WAIT_SECONDS')) * 1000,
     branchPollMs: positiveNumber('BRANCH_POLL_MS', get('BRANCH_POLL_MS')),
+    devPollMs: positiveNumber('DEV_POLL_SECONDS', get('DEV_POLL_SECONDS')) * 1000,
   });
 }

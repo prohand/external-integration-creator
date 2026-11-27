@@ -57,6 +57,11 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       subscribed: false,
       workflowPermissions: null,
       issues: [],
+      comments: [],
+      runs: [],
+      pulls: [],
+      dispatches: [],
+      branchInfo: {},
     };
     repos.set(fullName.toLowerCase(), repo);
     return repo;
@@ -80,7 +85,57 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
     addRepo,
   };
 
-  const server = await startFake(({ method, path, query, body, headers }) => {
+  let ids = 100;
+  const now = () => new Date().toISOString();
+  const repoOf = (full) => repos.get(full.toLowerCase());
+  // --- helpers to script what Claude / the CI do in a repository
+  fake.comment = (full, body, { bot = true, login: who = bot ? 'github-actions[bot]' : login } = {}) => {
+    const repo = repoOf(full);
+    const c = { id: ++ids, body, user: { login: who, type: bot ? 'Bot' : 'User' }, created_at: now(), updated_at: now(), html_url: `${repo.html_url}/issues/1#issuecomment-${ids}` };
+    repo.comments.push(c);
+    return c;
+  };
+  fake.addRun = (full, run) => {
+    const repo = repoOf(full);
+    const r = {
+      id: ++ids,
+      status: 'completed',
+      conclusion: 'success',
+      event: 'issues',
+      created_at: now(),
+      run_started_at: now(),
+      updated_at: now(),
+      jobs: [],
+      ...run,
+    };
+    r.html_url = `${repo.html_url}/actions/runs/${r.id}`;
+    r.jobs = r.jobs.map((j) => ({ id: ++ids, status: 'completed', html_url: `${r.html_url}/job/${ids}`, steps: [], ...j }));
+    repo.runs.unshift(r);
+    return r;
+  };
+  fake.pushBranch = (full, branch, commits, files) => {
+    const repo = repoOf(full);
+    const list = commits.map((message, i) => ({ sha: sha(`${branch}:${message}:${i}`), message, date: new Date(Date.now() + i * 1000).toISOString() }));
+    repo.branchInfo[branch] = { commits: list, files };
+    repo.refs[branch] = list.at(-1).sha;
+    return list;
+  };
+
+  const server = await startFake(async (req) => {
+    const reply = await handle(req);
+    // ETag on reads, 304 when unchanged (free in the real rate limit).
+    if (req.method === 'GET' && reply && (reply.status ?? 200) === 200 && typeof reply.body === 'object') {
+      const etag = `"${sha(JSON.stringify(reply.body))}"`;
+      if (req.headers['if-none-match'] === etag) {
+        fake.notModified = (fake.notModified ?? 0) + 1;
+        return { status: 304, body: '' };
+      }
+      return { ...reply, headers: { ...reply.headers, etag } };
+    }
+    return reply;
+  });
+
+  function handle({ method, path, query, body, headers }) {
     const denied = fake.deny[`${method} ${path}`];
     if (denied) {
       return {
@@ -100,6 +155,11 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       return { body: { login }, headers: { 'github-authentication-token-expiration': '2027-02-25 10:00:00 UTC' } };
     }
     if (method === 'GET' && path === '/user/subscriptions') return { body: [] };
+    const logPath = /^\/_logs\/([^/]+\/[^/]+)\/(\d+)$/.exec(path);
+    if (logPath && method === 'GET') {
+      const job = repoOf(logPath[1])?.runs.flatMap((r) => r.jobs).find((j) => j.id === Number(logPath[2]));
+      return { body: job?.log ?? '' };
+    }
     let list = /^\/(users|orgs)\/([^/]+)\/repos$/.exec(path);
     if (list && method === 'GET') {
       const owner = list[2].toLowerCase();
@@ -253,6 +313,69 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       return { status: 201, body: '' };
     }
 
+    // --- live development
+    if ((m = /^\/issues\/(\d+)\/comments$/.exec(rest))) {
+      if (method === 'GET') return { body: repo.comments };
+      if (method === 'POST') return { status: 201, body: fake.comment(full, body.body, { bot: false }) };
+    }
+    if ((m = /^\/actions\/workflows\/([\w.-]+)\/runs$/.exec(rest)) && method === 'GET') {
+      const runs = repo.runs.filter((r) => r.path === `.github/workflows/${m[1]}`);
+      return { body: { total_count: runs.length, workflow_runs: runs.map(({ jobs, ...r }) => r) } };
+    }
+    if ((m = /^\/actions\/workflows\/([\w.-]+)\/dispatches$/.exec(rest)) && method === 'POST') {
+      repo.dispatches.push({ workflow: m[1], ...body });
+      return { status: 204, body: '' };
+    }
+    if (rest === '/actions/runs' && method === 'GET') {
+      const runs = repo.runs.filter((r) => !query.get('head_sha') || r.head_sha === query.get('head_sha'));
+      return { body: { workflow_runs: runs.map(({ jobs, ...r }) => r) } };
+    }
+    if ((m = /^\/actions\/runs\/(\d+)\/jobs$/.exec(rest)) && method === 'GET') {
+      const run = repo.runs.find((r) => r.id === Number(m[1]));
+      return run ? { body: { jobs: run.jobs.map(({ log, ...j }) => j) } } : { status: 404, body: {} };
+    }
+    if ((m = /^\/actions\/jobs\/(\d+)\/logs$/.exec(rest)) && method === 'GET') {
+      // Like GitHub: a redirect to the log file.
+      return { status: 302, headers: { location: `/_logs/${full}/${m[1]}` }, body: '' };
+    }
+    if (rest === '/pulls' && method === 'GET') return { body: [...repo.pulls].reverse() };
+    if (rest === '/pulls' && method === 'POST') {
+      if (repo.pulls.some((p) => p.head.ref === body.head && p.state === 'open')) {
+        return { status: 422, body: { message: 'A pull request already exists' } };
+      }
+      const number = repo.issues.length + repo.pulls.length + 1;
+      const pr = {
+        number,
+        title: body.title,
+        body: body.body,
+        state: 'open',
+        draft: false,
+        merged_at: null,
+        created_at: now(),
+        head: { ref: body.head, sha: repo.refs[body.head] },
+        base: { ref: body.base },
+        html_url: `${repo.html_url}/pull/${number}`,
+      };
+      repo.pulls.push(pr);
+      return { status: 201, body: pr };
+    }
+    if (rest === '/branches' && method === 'GET') return { body: Object.keys(repo.refs).map((name) => ({ name })) };
+    if ((m = /^\/compare\/([^.]+)\.\.\.(.+)$/.exec(rest)) && method === 'GET') {
+      const info = repo.branchInfo[decodeURIComponent(m[2])];
+      if (!info) return { status: 404, body: { message: 'Not Found' } };
+      return {
+        body: {
+          ahead_by: info.commits.length,
+          commits: info.commits.map((c) => ({
+            sha: c.sha,
+            html_url: `${repo.html_url}/commit/${c.sha}`,
+            commit: { message: c.message, author: { name: 'Claude', date: c.date } },
+          })),
+          files: info.files,
+        },
+      };
+    }
+
     // --- issues
     if (rest === '/issues' && method === 'POST') {
       if (!body.title) return { status: 422, body: { message: 'Validation Failed' } };
@@ -266,7 +389,7 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       return issue ? { body: issue } : { status: 404, body: { message: 'Not Found' } };
     }
     return undefined;
-  });
+  }
 
   return Object.assign(fake, server);
 }

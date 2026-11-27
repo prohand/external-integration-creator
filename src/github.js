@@ -55,12 +55,14 @@ export class GitHubError extends Error {
 }
 
 export class GitHub {
-  constructor({ apiUrl, token, dryRun = false, timeoutMs = 20_000, onSimulated } = {}) {
+  constructor({ apiUrl, token, dryRun = false, timeoutMs = 20_000, onSimulated, etags = false } = {}) {
     this.apiUrl = apiUrl;
     this.token = token;
     this.dryRun = dryRun;
     this.timeoutMs = timeoutMs;
     this.onSimulated = onSimulated;
+    // Conditional GETs: a 304 answer does not count in the GitHub rate limit.
+    this.etags = etags ? new Map() : null;
   }
 
   /**
@@ -84,6 +86,8 @@ export class GitHub {
     };
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (body !== undefined) headers['content-type'] = 'application/json';
+    const cached = method === 'GET' && this.etags ? this.etags.get(url) : null;
+    if (cached) headers['if-none-match'] = cached.etag;
 
     let response;
     try {
@@ -98,6 +102,9 @@ export class GitHub {
       throw new GitHubError(`GitHub injoignable (${reason})`, { method, path });
     }
 
+    if (response.status === 304 && cached) {
+      return { status: 200, data: cached.data, headers: response.headers, simulated: false, cached: true };
+    }
     const text = await response.text();
     let data = text;
     if (!raw && text) {
@@ -108,6 +115,12 @@ export class GitHub {
       }
     }
     if (response.ok || allow.includes(response.status)) {
+      const etag = response.headers.get('etag');
+      if (this.etags && method === 'GET' && response.status === 200 && etag) {
+        this.etags.delete(url);
+        this.etags.set(url, { etag, data });
+        if (this.etags.size > 400) this.etags.delete(this.etags.keys().next().value);
+      }
       return { status: response.status, data, headers: response.headers, simulated: false };
     }
     throw this.error(method, path, response, data);

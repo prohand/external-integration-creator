@@ -30,6 +30,7 @@ import { fetchStoreIndex } from './sources/store.js';
 import { buildBoard, fetchTracker } from './sources/tracker.js';
 import { loadRepoSettings, publicSettings, saveSettings } from './settings.js';
 import { Hub } from './sse.js';
+import { DevMonitor, devChannel } from './live/monitor.js';
 import {
   ApiError,
   Router,
@@ -41,7 +42,7 @@ import {
 } from './web.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.4.0';
 
 // Real launches (creating things on GitHub) can be switched off here.
 export const REAL_LAUNCH_READY = true;
@@ -85,6 +86,13 @@ export function createApp({ config, db, hub = new Hub() }) {
   const checkAuth = createBasicAuth({ user: config.appUser, password: config.appPassword });
   const router = new Router();
   const github = new GitHub({ apiUrl: config.githubApiUrl, token: config.githubToken, timeoutMs: config.httpTimeoutMs });
+  // Live follow-up: conditional GETs (304 answers are free in the rate limit).
+  const devGithub = new GitHub({
+    apiUrl: config.githubApiUrl,
+    token: config.githubToken,
+    timeoutMs: config.httpTimeoutMs,
+    etags: true,
+  });
 
   const sources = {
     tracker: (opts) => cache.get('tracker', () => fetchTracker(config), opts),
@@ -168,6 +176,31 @@ export function createApp({ config, db, hub = new Hub() }) {
       };
     },
   });
+
+  const monitor = new DevMonitor({
+    hub,
+    gh: devGithub,
+    intervalMs: config.devPollMs,
+    findInteg: (id) => db.read().integrations.find((i) => i.id === id) ?? null,
+  });
+
+  /** A launched (not simulated) integration with its tracking issue. */
+  function realInteg(id, { needIssue = true } = {}) {
+    const integ = runner.find(id);
+    if (integ.simulate) throw new ApiError(409, 'Simulation : il n’y a pas de développement réel à suivre.');
+    if (needIssue && !integ.issueNumber) throw new ApiError(409, 'Pas d’issue de suivi pour cette intégration.');
+    return integ;
+  }
+
+  async function postClaudeMessage(integ, text) {
+    const clean = String(text ?? '').trim();
+    if (clean.length < 2 || clean.length > 5000) throw new ApiError(400, 'Message vide ou trop long (5000 caractères au plus).');
+    const body = /^@claude\b/i.test(clean) ? clean : `@claude ${clean}`;
+    if (config.dryRun) return { simulated: true, body };
+    const { data } = await github.post(`/repos/${integ.owner}/${integ.repoName}/issues/${integ.issueNumber}/comments`, { body });
+    monitor.soon(integ.id);
+    return { url: data.html_url, body };
+  }
 
   // --- routes -------------------------------------------------------------------
 
@@ -377,6 +410,47 @@ export function createApp({ config, db, hub = new Hub() }) {
     return runner.view(runner.find(params.id));
   });
 
+  // --- live development follow-up ---
+  router.get('/api/launches/:id/dev', ({ params }) => monitor.latest(runner.find(params.id).id));
+
+  router.get('/api/launches/:id/dev/events', ({ req, res, params }) => {
+    const id = runner.find(params.id).id;
+    const last = monitor.last.get(id)?.snap;
+    hub.open(req, res, devChannel(id), last ? [{ event: 'dev', data: last }] : []);
+  });
+
+  router.post('/api/launches/:id/dev/message', ({ params, body }) =>
+    postClaudeMessage(realInteg(params.id), body?.text),
+  );
+
+  // "Relancer Claude": a message adapted to what went wrong.
+  router.post('/api/launches/:id/dev/retry', async ({ params }) => {
+    const integ = realInteg(params.id);
+    const snap = await monitor.latest(integ.id);
+    const tests = snap?.alerts?.find((a) => a.kind === 'tests');
+    const text = tests
+      ? `La CI échoue sur ta branche (${tests.url}) : ${tests.message} Corrige le problème, relance npm test, npm run lint et npm run format:check, puis pousse.`
+      : 'Reprends le travail là où tu t’es arrêté (la dernière exécution s’est arrêtée avant la fin).';
+    return postClaudeMessage(integ, text);
+  });
+
+  // Opens the pull request of Claude's branch with the user's token (its CI then runs).
+  router.post('/api/launches/:id/dev/pr', async ({ params }) => {
+    const integ = realInteg(params.id, { needIssue: false });
+    const snap = await monitor.poll(integ.id);
+    if (!snap?.branch) throw new ApiError(409, 'Aucune branche de travail trouvée.');
+    if (snap.pr && snap.pr.state === 'open') return { url: snap.pr.url, number: snap.pr.number, existing: true };
+    if (config.dryRun) return { simulated: true };
+    const { data } = await github.post(`/repos/${integ.owner}/${integ.repoName}/pulls`, {
+      title: `${integ.displayName} : première version`,
+      head: snap.branch,
+      base: integ.defaultBranch || 'main',
+      body: `${integ.issueNumber ? `Closes #${integ.issueNumber}\n\n` : ''}Pull request ouverte par External Integration Creator.`,
+    });
+    monitor.soon(integ.id, 1000);
+    return { url: data.html_url, number: data.number };
+  });
+
   router.delete('/api/launches/:id', async ({ params }) => {
     const integ = runner.find(params.id);
     if (runner.active.has(integ.id)) throw new ApiError(409, 'Lancement en cours : attendez la fin.');
@@ -461,7 +535,10 @@ export function createApp({ config, db, hub = new Hub() }) {
   // SSE connections stay open: keep Node's default timeouts out of their way.
   server.requestTimeout = 0;
   server.headersTimeout = 30_000;
-  server.on('close', () => hub.closeAll());
+  server.on('close', () => {
+    monitor.stopAll();
+    hub.closeAll();
+  });
 
-  return { server, router, cache, sources, dashboard, runner, hub, github };
+  return { server, router, cache, sources, dashboard, runner, hub, github, monitor };
 }
