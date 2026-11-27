@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <title>Integration Creator · Gladys</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#/">Integration Creator</a>
+      <nav class="nav" aria-label="Navigation principale">
+        <a href="#/" data-nav="dashboard">Tableau de bord</a>
+        <a href="#/mes-integrations" data-nav="mine">Mes intégrations</a>
+        <a href="#/reglages" data-nav="settings">Réglages</a>
+      </nav>
+      <span id="mode" class="badge badge-warn" hidden>Mode simulation</span>
+    </header>
+    <main id="view" class="view" aria-live="polite">
+      <p class="muted">Chargement…</p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+Intégration Gladys,Auteur,Dépôt GitHub,Cover,Statut,Type,Version,Vue depuis,Dernier push,Équivalent HA (liste),Doublon avec,Description
+Google Cast,gboulvin,https://github.com/gboulvin/Gladys-Google-Cast,https://example.org/c.png,Publiée (store),device,1.0.0,2026-11-19,2026-11-24,F1 Google Cast,,Chromecast
+Gladys AirPlay,gboulvin,https://github.com/gboulvin/Gladys-Airplay,,Publiée (store),device,1.0.0,2026-11-19,2026-11-24,hors liste,,AirPlay
+BTHome Pro,someone,https://github.com/someone/gladys-bthome-pro,,En cours (dépôt GitHub),device,0.1.0,2026-11-19,2026-11-24,10 BTHome,,BTHome
+Vieux truc,old,https://github.com/old/gladys-vieux,,"Archivée, dépréciée ou supprimée",device,0.1.0,,,hors liste,,Ancien

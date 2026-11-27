@@ -1,0 +1,11 @@
+N°,Prio,Intégration Home Assistant,Catégorie,Usage HA,Accès,Sans matériel,Zone,Doc HA / HACS,Statut Gladys,Correspondance,Intégration Gladys,Auteur,Dépôt GitHub,Cover,Version,Doublon,Autres dépôts / note,Description HA,Source,Liste de novembre,Type Gladys,Vu chez,Installations HA
+F1,P1,Google Cast,Multimedia,50.80%,Local,,Worldwide,https://www.home-assistant.io/integrations/cast/,Publiée (store),Automatique (même nom),Google Cast,gboulvin,https://github.com/gboulvin/Gladys-Google-Cast,,1.0.0,,,"Chromecast, enceintes ""Google Nest"" et TV",Source,,,,
+F2,P1,Bluetooth,Protocols & hubs,49.00%,Local,,Worldwide,https://www.home-assistant.io/integrations/bluetooth/,Native Gladys,,,,,,,,,Adaptateurs Bluetooth,Source,,,,
+10,P1,BTHome,Protocols & hubs,5.40%,Local,,Worldwide,https://www.home-assistant.io/integrations/bthome/,Libre,,,,,,,,,"Capteurs Bluetooth BTHome",Source,,,,
+28,P2,Oral-B,Services & daily life,3.11%,Local,oui,Worldwide,https://www.home-assistant.io/integrations/oralb/,Libre,,,,,,,,,Brosses à dents,Source,,,,120
+29,P1,Météo Truc,Weather & environment / Energy,1%,Cloud,oui,Worldwide,javascript:alert(1),Libre,,,,,,,,,Prévisions,Source,,,,5000
+510,P3,Signal Messenger,Messaging & notifications,,,,,,Annoncée sur le forum,,,,,,,,,,,,,,
+N12,P2,AirPlay,Multimedia,,,,,,Libre,,,,,,,,,AirPlay speakers,Source,,,,
+N13,P2,Ecoflow,Energy,,,,,,En cours (dépôt GitHub),,Ecoflow,VV69004,https://github.com/VV69004/gladys-ecoflow,,,,,,,,,,
+N14,P4,Mystère,Leisure,,,,,,Statut bizarre,,,,,,,,,,,,,,
+N15,P2,Velux,"Lighting, plugs & covers",,,,,,Libre,,,,,,,,,,,,,,

@@ -1,0 +1,42 @@
+{
+  "repository": {
+    "has_issues": true,
+    "has_wiki": false,
+    "has_projects": false,
+    "has_discussions": false,
+    "allow_squash_merge": true,
+    "allow_merge_commit": false,
+    "allow_rebase_merge": false,
+    "allow_auto_merge": true,
+    "delete_branch_on_merge": true,
+    "allow_update_branch": true,
+    "squash_merge_commit_title": "PR_TITLE",
+    "squash_merge_commit_message": "PR_BODY",
+    "security_and_analysis": {
+      "secret_scanning": { "status": "enabled" },
+      "secret_scanning_push_protection": { "status": "enabled" }
+    }
+  },
+  "security": {
+    "vulnerability_alerts": true,
+    "automated_security_fixes": true,
+    "private_vulnerability_reporting": true
+  },
+  "actions": {
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": true
+  },
+  "topics": {
+    "wip": "gladys-integration-wip",
+    "official": "gladys-assistant-integration",
+    "extra": ["gladys", "gladys-assistant", "home-automation"]
+  },
+  "labels": [
+    { "name": "claude", "color": "d97757", "description": "Travail confié à Claude" },
+    { "name": "en cours", "color": "fbca04", "description": "Développement en cours" },
+    { "name": "publication", "color": "0e8a16", "description": "Prêt pour le store Gladys" }
+  ],
+  "claude": {
+    "max_turns": 40
+  }
+}

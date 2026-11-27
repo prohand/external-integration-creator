@@ -1,0 +1,23 @@
+# Integration Creator — one instance per person, with their own GitHub token.
+#   cp .env.example .env   (then fill it in)
+#   mkdir -p data && sudo chown 1000:1000 data
+#   docker compose up -d --build
+services:
+  integration-creator:
+    build: .
+    image: integration-creator:latest
+    container_name: integration-creator
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '${HOST_PORT:-3000}:${PORT:-3000}'
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m

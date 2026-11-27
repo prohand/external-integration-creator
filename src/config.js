@@ -1,0 +1,79 @@
+// -----------------------------------------------------------------------------
+// Runtime configuration, read once from the environment (and `.env`).
+// Every external URL is configurable so the tests can point at fake servers.
+// -----------------------------------------------------------------------------
+
+const DEFAULTS = {
+  PORT: '3000',
+  HOST: '0.0.0.0',
+  BASE_PATH: '',
+  APP_USER: 'admin',
+  APP_PASSWORD: '',
+  DATA_DIR: '/data',
+  CACHE_TTL_MINUTES: '15',
+  TRUST_PROXY: 'true',
+  DRY_RUN: 'false',
+  LOG_LEVEL: 'info',
+  TRACKER_BASE_URL: 'https://william-de71.github.io/gladys-integrations-tracker',
+  STORE_BASE_URL: 'https://integration-store-storage.gladysassistant.com',
+  FORUM_URL: 'https://community.gladysassistant.com',
+  GITHUB_API_URL: 'https://api.github.com',
+  GITHUB_WEB_URL: 'https://github.com',
+  GITHUB_TOKEN: '',
+  HTTP_TIMEOUT_SECONDS: '20',
+};
+
+function bool(value) {
+  return ['1', 'true', 'yes', 'on', 'oui'].includes(String(value).trim().toLowerCase());
+}
+
+function positiveNumber(name, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`Invalid value for ${name}: "${value}" (a positive number is expected)`);
+  }
+  return n;
+}
+
+function trimSlash(url) {
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+/**
+ * Normalizes BASE_PATH: "" or "/sub/path" (leading slash, no trailing slash).
+ */
+export function normalizeBasePath(value) {
+  const parts = String(value ?? '')
+    .split('/')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (!/^[A-Za-z0-9._~-]+$/.test(part) || part === '.' || part === '..') {
+      throw new Error(`Invalid BASE_PATH segment: "${part}"`);
+    }
+  }
+  return parts.length ? `/${parts.join('/')}` : '';
+}
+
+export function loadConfig(env = process.env) {
+  const get = (key) => (env[key] !== undefined && env[key] !== '' ? env[key] : DEFAULTS[key]);
+  return Object.freeze({
+    port: Number.parseInt(get('PORT'), 10),
+    host: get('HOST'),
+    basePath: normalizeBasePath(get('BASE_PATH')),
+    appUser: get('APP_USER'),
+    appPassword: env.APP_PASSWORD ?? '',
+    dataDir: get('DATA_DIR'),
+    cacheTtlMs: positiveNumber('CACHE_TTL_MINUTES', get('CACHE_TTL_MINUTES')) * 60_000,
+    trustProxy: bool(get('TRUST_PROXY')),
+    dryRun: bool(get('DRY_RUN')),
+    logLevel: get('LOG_LEVEL'),
+    trackerBaseUrl: trimSlash(get('TRACKER_BASE_URL')),
+    storeBaseUrl: trimSlash(get('STORE_BASE_URL')),
+    forumUrl: trimSlash(get('FORUM_URL')),
+    githubApiUrl: trimSlash(get('GITHUB_API_URL')),
+    githubWebUrl: trimSlash(get('GITHUB_WEB_URL')),
+    githubToken: get('GITHUB_TOKEN'),
+    httpTimeoutMs: positiveNumber('HTTP_TIMEOUT_SECONDS', get('HTTP_TIMEOUT_SECONDS')) * 1000,
+  });
+}
