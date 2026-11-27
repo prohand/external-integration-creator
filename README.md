@@ -9,7 +9,7 @@ Petite application web, à héberger chez soi, pour la communauté [Gladys Assis
 
 Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'instance publique, et aucune donnée n'est partagée.
 
-> **État du projet** : phase 2 sur 5. Le tableau de bord et le lancement **en simulation** marchent. Le lancement réel, le suivi du développement et la publication arrivent dans les phases suivantes.
+> **État du projet** : phase 3 sur 5. Le tableau de bord, le lancement (en simulation et en réel) et les annonces sur le forum marchent. Le suivi en direct du développement par Claude et la publication arrivent dans les phases suivantes.
 
 ---
 
@@ -104,7 +104,14 @@ L'appli utilise un jeton **fine-grained** (plus sûr qu'un jeton classique : les
 9. Cliquez sur **Generate token**, copiez le jeton (`github_pat_…`) et collez-le dans `.env` (`GITHUB_TOKEN=`).
 10. Redémarrez : `docker compose up -d`.
 
-La page **Réglages** de l'appli teste le jeton. Si un droit manque, elle dit lequel et à quoi il sert.
+Ensuite, dans l'appli, page **Réglages → Tester le jeton GitHub** :
+
+- elle affiche le compte du jeton et sa date d'expiration ;
+- elle essaie chaque droit sur un de vos dépôts existants, avec des requêtes volontairement invalides : **rien n'est modifié**. Un droit présent donne ✓, un droit manquant ✗, avec à quoi il sert ;
+- l'écriture des droits Workflows et Secrets ne peut pas se tester sans rien écrire : elle est vérifiée au premier lancement (?) ;
+- si votre compte n'a encore aucun dépôt, les droits seront vérifiés au premier lancement.
+
+Pendant un lancement, si un droit manque, l'étape concernée dit lequel et à quoi il sert. Ajoutez le droit au jeton sur GitHub, puis cliquez sur **Relancer** sur cette étape.
 
 ---
 
@@ -213,7 +220,8 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
 2. **Lancer** :
    - le nom est vérifié en direct (tracker, store, forum et GitHub) ;
    - remplissez la description en 4 langues (10 à 100 caractères chacune), 1 à 3 catégories, des mots-clés et le cahier des charges ;
-   - cochez les actions automatiques voulues.
+   - cochez les actions automatiques voulues ;
+   - décochez « Simulation » pour un vrai lancement : l'appli demande une confirmation avant de créer le dépôt public.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
 4. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
 5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.

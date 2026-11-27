@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Cache } from './cache.js';
 import { STORE_CATEGORIES } from './categories.js';
 import { GitHub } from './github.js';
+import { checkToken } from './github-check.js';
 import { log, registerSecret } from './log.js';
 import { defaultRepoName } from './names.js';
 import { checkName } from './launch/checks.js';
@@ -40,10 +41,10 @@ import {
 } from './web.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.3.0';
 
-// Real launches (creating things on GitHub / the forum) are enabled in phase 3.
-export const REAL_LAUNCH_READY = false;
+// Real launches (creating things on GitHub) can be switched off here.
+export const REAL_LAUNCH_READY = true;
 
 // Slim card for the browser: only what the dashboard shows.
 function card(item) {
@@ -193,6 +194,12 @@ export function createApp({ config, db, hub = new Hub() }) {
   router.post('/api/refresh', () => dashboard({ force: true }));
 
   router.get('/api/settings', () => publicSettings(db.read()));
+
+  // Probes the token rights without changing anything (see github-check.js).
+  router.post('/api/github/check', async () => {
+    shortCache.clear('github:user');
+    return checkToken(github, { owner: db.read().settings.owner || null });
+  });
   router.put('/api/settings', async ({ body }) => {
     const result = await saveSettings(db, body ?? {});
     shortCache.clear('github:user');

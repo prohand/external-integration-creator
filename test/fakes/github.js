@@ -93,7 +93,18 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       return { status: 401, body: { message: 'Bad credentials' } };
     }
 
-    if (method === 'GET' && path === '/user') return { body: { login } };
+    if (method === 'GET' && path === '/user' && headers.authorization !== 'Bearer test-token') {
+      return { status: 401, body: { message: 'Bad credentials' } };
+    }
+    if (method === 'GET' && path === '/user') {
+      return { body: { login }, headers: { 'github-authentication-token-expiration': '2027-02-25 10:00:00 UTC' } };
+    }
+    if (method === 'GET' && path === '/user/subscriptions') return { body: [] };
+    let list = /^\/(users|orgs)\/([^/]+)\/repos$/.exec(path);
+    if (list && method === 'GET') {
+      const owner = list[2].toLowerCase();
+      return { body: [...repos.values()].filter((r) => r.owner.login.toLowerCase() === owner) };
+    }
     let m = /^\/users\/([^/]+)$/.exec(path);
     if (m && method === 'GET') return { body: { login: m[1], type: m[1] === login ? 'User' : ownerType } };
 
@@ -165,6 +176,14 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
     if ((m = /^\/git\/blobs\/([0-9a-f]+)$/.exec(rest)) && method === 'GET') {
       return { body: { content: blobs.get(m[1]), encoding: 'base64' } };
     }
+    if (rest === '/git/refs' && method === 'POST') {
+      if (!/^refs\/.+\/.+/.test(body.ref ?? '')) return { status: 422, body: { message: 'Reference name is invalid' } };
+      repo.refs[body.ref.replace(/^refs\/heads\//, '')] = body.sha;
+      return { status: 201, body: { ref: body.ref } };
+    }
+    if (/^\/actions\/runs\/\d+\/rerun$/.test(rest) && method === 'POST') {
+      return { status: 404, body: { message: 'Not Found' } };
+    }
     if (rest === '/git/blobs' && method === 'POST') {
       const s = sha(body.content);
       blobs.set(s, body.content);
@@ -202,6 +221,9 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
     }
     if (rest === '/topics' && method === 'GET') return { body: { names: repo.topics } };
     if (rest === '/topics' && method === 'PUT') {
+      if (body.names.some((n) => !/^[a-z0-9][a-z0-9-]{0,49}$/.test(n))) {
+        return { status: 422, body: { message: 'Invalid topic names' } };
+      }
       repo.topics = body.names;
       return { body: { names: repo.topics } };
     }
@@ -233,6 +255,7 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
 
     // --- issues
     if (rest === '/issues' && method === 'POST') {
+      if (!body.title) return { status: 422, body: { message: 'Validation Failed' } };
       issueCounter += 1;
       const issue = { number: issueCounter, html_url: `${repo.html_url}/issues/${issueCounter}`, ...body };
       repo.issues.push(issue);

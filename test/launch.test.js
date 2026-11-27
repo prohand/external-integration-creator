@@ -134,18 +134,6 @@ test('launch form validation lists every problem', async () => {
   }
 });
 
-test('real launches stay disabled until phase 3', async () => {
-  const world = await startWorld();
-  try {
-    const { status, body } = await world.call('POST', 'launches', { ...FORM, simulate: false });
-    assert.equal(status, 501);
-    assert.match(body.error, /phase 3/);
-    assert.deepEqual(world.writes(), []);
-  } finally {
-    await world.close();
-  }
-});
-
 test('DRY_RUN=true forces the simulation', async () => {
   const world = await startWorld({ env: { DRY_RUN: 'true' } });
   try {

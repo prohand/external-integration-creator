@@ -71,7 +71,7 @@ async function stepCheckName(ctx) {
 
 // --- 2. repository -----------------------------------------------------------------
 
-async function copyTemplateWithGitData(ctx, template) {
+async function copyTemplateWithGitData(ctx, template, { create = true } = {}) {
   const { gh, integ } = ctx;
   const t = `/repos/${ctx.template.owner}/${ctx.template.repo}`;
   const tree = await gh.get(`${t}/git/trees/${template.default_branch}?recursive=1`);
@@ -79,18 +79,20 @@ async function copyTemplateWithGitData(ctx, template) {
   const blobs = tree.tree.filter((e) => e.type === 'blob');
   ctx.log(`Copie du modèle par l’API Git Data : ${blobs.length} fichiers`);
 
-  const owner = await gh.get(`/users/${integ.owner}`);
-  const createPath = owner.type === 'Organization' ? `/orgs/${integ.owner}/repos` : '/user/repos';
-  const { data: repo } = await gh.post(
-    createPath,
-    { name: integ.repoName, description: integ.description.en, private: false, auto_init: true },
-    { simulate: () => ({ html_url: repoUrl(integ), default_branch: 'main' }) },
-  );
-  integ.defaultBranch = repo.default_branch || 'main';
-  if (ctx.dryRun) return;
-
-  integ.repoCreated = true;
-  await ctx.saveInteg();
+  if (create) {
+    const owner = await gh.get(`/users/${integ.owner}`);
+    const createPath = owner.type === 'Organization' ? `/orgs/${integ.owner}/repos` : '/user/repos';
+    const { data: repo } = await gh.post(
+      createPath,
+      { name: integ.repoName, description: integ.description.en, private: false, auto_init: true },
+      { simulate: () => ({ html_url: repoUrl(integ), default_branch: 'main' }) },
+    );
+    integ.defaultBranch = repo.default_branch || 'main';
+    if (ctx.dryRun) return;
+    integ.repoCreated = true;
+    integ.copyMode = true;
+    await ctx.saveInteg();
+  }
   const head = await waitForBranch(ctx, integ.defaultBranch);
 
   const entries = [];
@@ -115,6 +117,14 @@ async function stepCreateRepo(ctx) {
   const { gh, integ } = ctx;
   if (integ.repoCreated && (await gh.exists(repoPath(integ)))) {
     setLinks(integ);
+    const branch = integ.defaultBranch || 'main';
+    const manifest = await gh.readFile(integ.owner, integ.repoName, 'gladys-assistant-integration.json', branch);
+    if (!manifest && integ.copyMode) {
+      ctx.log('Le dépôt existe mais la copie du modèle n’est pas finie : reprise');
+      const template = await gh.get(`/repos/${ctx.template.owner}/${ctx.template.repo}`);
+      await copyTemplateWithGitData(ctx, template, { create: false });
+      return { message: `Copie du modèle terminée : ${repoUrl(integ)}` };
+    }
     return { message: `Dépôt déjà créé : ${repoUrl(integ)}` };
   }
   if (!ctx.dryRun && (await gh.exists(repoPath(integ)))) {
@@ -231,8 +241,20 @@ async function stepCustomize(ctx) {
 // --- 5 to 10. repository settings ---------------------------------------------------------
 
 async function stepRepoSettings(ctx) {
-  await ctx.gh.patch(repoPath(ctx.integ), ctx.repoSettings.repository ?? {});
-  return { message: `${ctx.dryRun ? 'Simulation : réglages' : 'Réglages'} appliqués (config/repo-settings.json).` };
+  const { security_and_analysis: security, ...settings } = ctx.repoSettings.repository ?? {};
+  await ctx.gh.patch(repoPath(ctx.integ), settings);
+  if (security) {
+    // Separate call: a plan or an organization policy may refuse it alone.
+    try {
+      await ctx.gh.patch(repoPath(ctx.integ), { security_and_analysis: security });
+    } catch (err) {
+      return {
+        status: 'warning',
+        message: `Réglages appliqués, sauf la détection des secrets : ${err.message}`,
+      };
+    }
+  }
+  return { message: `${sim(ctx)}Réglages appliqués (config/repo-settings.json).` };
 }
 
 async function stepSecurity(ctx) {

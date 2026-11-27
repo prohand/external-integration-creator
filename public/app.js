@@ -422,7 +422,7 @@ async function showLaunch(key) {
     keywords: prefill.keywords.join(', '),
     spec: '',
     actions: Object.fromEntries(s.options.map((o) => [o.key, true])),
-    simulate: true,
+    simulate: s.dryRun || !s.realLaunch,
   };
   if (!s.claudeTokenSet) form.actions.claude = false;
 
@@ -627,7 +627,7 @@ async function showLaunch(key) {
     { class: 'check-line' },
     h('input', {
       type: 'checkbox',
-      checked: true,
+      checked: form.simulate,
       disabled: simulateLocked,
       onchange: (e) => {
         form.simulate = e.target.checked;
@@ -638,7 +638,7 @@ async function showLaunch(key) {
       ? h(
           'span',
           { class: 'muted small' },
-          s.dryRun ? ' — imposée (DRY_RUN=true)' : ' — imposée : le lancement réel arrive à la phase 3',
+          s.dryRun ? ' — imposée (DRY_RUN=true)' : ' — imposée : lancement réel désactivé',
         )
       : null,
   );
@@ -648,6 +648,15 @@ async function showLaunch(key) {
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    if (
+      !form.simulate &&
+      !confirm(
+        `Lancer pour de vrai ?\n\nLe dépôt public ${owner ?? '?'}/${form.repoName} va être créé sur GitHub, avec ses réglages, son issue de suivi` +
+          `${form.actions.claude ? ' et Claude' : ''}.`,
+      )
+    ) {
+      return;
+    }
     submit.disabled = true;
     submit.textContent = 'Lancement…';
     formError.replaceChildren();
@@ -1059,6 +1068,67 @@ async function renderForumBatch() {
   );
 }
 
+const PERM_ICONS = { ok: '✓', missing: '✗', unknown: '?' };
+
+/** "Tester le jeton": probes every right without changing anything. */
+function tokenCheckBox() {
+  const result = h('div');
+  const button = h(
+    'button',
+    {
+      class: 'button',
+      type: 'button',
+      onclick: async () => {
+        button.disabled = true;
+        result.replaceChildren(loading('Test en cours…'));
+        try {
+          const r = await api('github/check', { method: 'POST' });
+          result.replaceChildren(
+            h('p', { class: `alert ${r.ok ? 'alert-ok' : 'alert-warn'}` }, r.message ?? (r.ok ? 'Jeton valide.' : '')),
+            r.login
+              ? h(
+                  'p',
+                  { class: 'small muted' },
+                  `Compte du jeton : ${r.login} · cible : ${r.owner} · type : ${r.tokenType}`,
+                  r.expiresAt ? ` · expire le ${formatDate(r.expiresAt)}` : '',
+                )
+              : null,
+            r.permissions?.length
+              ? h(
+                  'ul',
+                  { class: 'checks' },
+                  r.permissions.map((p) =>
+                    h(
+                      'li',
+                      { class: `check check-${p.status === 'ok' ? 'ok' : p.status === 'missing' ? 'ko' : 'unknown'}` },
+                      h('span', { class: 'check-icon', 'aria-hidden': 'true' }, PERM_ICONS[p.status]),
+                      h('strong', {}, `${p.label}${p.level ? ` (${p.level === 'write' ? 'écriture' : 'lecture'})` : ''}`),
+                      ' ',
+                      h('span', { class: 'muted' }, `sert à ${p.use}`),
+                      p.note ? h('span', { class: 'small muted' }, ` — ${p.note}`) : null,
+                    ),
+                  ),
+                )
+              : null,
+          );
+        } catch (err) {
+          result.replaceChildren(errorBox(err.message));
+        }
+        button.disabled = false;
+      },
+    },
+    'Tester le jeton GitHub',
+  );
+  return h(
+    'section',
+    { class: 'batch' },
+    h('h2', {}, 'Jeton GitHub'),
+    h('p', { class: 'muted small' }, 'Le test essaie chaque droit sur un de vos dépôts, avec des requêtes invalides : rien n’est modifié.'),
+    h('div', {}, button),
+    result,
+  );
+}
+
 // --- settings ------------------------------------------------------------------------------
 
 function secretField(label, name, isSet, hint, values) {
@@ -1130,12 +1200,13 @@ async function showSettings() {
       h('dt', {}, 'Version'),
       h('dd', {}, s.version),
       h('dt', {}, 'Jeton GitHub (.env)'),
-      h('dd', {}, s.githubTokenSet ? 'Réglé (le test des droits arrive à la phase 3)' : 'Non réglé : ajoutez GITHUB_TOKEN dans .env'),
+      h('dd', {}, s.githubTokenSet ? 'Réglé' : 'Non réglé : ajoutez GITHUB_TOKEN dans .env'),
       h('dt', {}, 'Mode simulation (DRY_RUN)'),
       h('dd', {}, s.dryRun ? 'Oui' : 'Non'),
       h('dt', {}, 'Cache des sources'),
       h('dd', {}, `${s.cacheMinutes} min`),
     ),
+    tokenCheckBox(),
     h(
       'form',
       { class: 'launch-form', onsubmit: onSubmit },
