@@ -1,11 +1,18 @@
 // -----------------------------------------------------------------------------
-// Gladys community forum (Discourse): search for "Intégration externe - X"
-// topics, and topic creation with the user's API key.
+// Gladys community forum (Discourse).
+// - Search for "Intégration externe - X" topics (public).
+// - Each user connects their own account with a Discourse *User API Key*:
+//   the app makes an RSA key pair, the user approves on the forum, the forum
+//   shows an encrypted code, the user pastes it back here. No callback URL:
+//   nothing has to be reachable from the Internet.
 // -----------------------------------------------------------------------------
 
+import { constants, createPrivateKey, generateKeyPairSync, privateDecrypt, randomBytes } from 'node:crypto';
 import { USER_AGENT, fetchJson, httpRequest } from '../http.js';
 
 export const TOPIC_PREFIX = 'Intégration externe - ';
+export const APPLICATION_NAME = 'External Integration Creator';
+export const SCOPES = 'read,write';
 const TITLE = /^\s*int[ée]gration\s+externe\s*[-–—:]\s*(.+?)\s*$/i;
 
 /** "Intégration externe - Oral-B" -> "Oral-B" (null for other titles). */
@@ -34,18 +41,136 @@ export async function searchIntegrationTopics(config, term) {
     .filter((t) => t.name);
 }
 
-/** Creates a topic. Returns { id, url }. */
-export async function createTopic(config, { apiKey, username, categoryId, title, raw }) {
+/** Public categories (id, name), sub-categories included. */
+export async function listCategories(config) {
+  const data = await fetchJson(`${config.forumUrl}/categories.json?include_subcategories=true`, {
+    timeoutMs: config.httpTimeoutMs,
+  });
+  const out = [];
+  for (const c of data?.category_list?.categories ?? []) {
+    out.push({ id: c.id, name: c.name });
+    for (const sub of c.subcategory_list ?? []) out.push({ id: sub.id, name: `${c.name} › ${sub.name}` });
+  }
+  return out;
+}
+
+// --- User API Key -------------------------------------------------------------------
+
+/** Starts a connection: key pair + the forum URL the user must open. */
+export function startUserApiKey(config) {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pending = {
+    privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    nonce: randomBytes(16).toString('hex'),
+    clientId: `eic-${randomBytes(12).toString('hex')}`,
+    createdAt: new Date().toISOString(),
+  };
+  const params = new URLSearchParams({
+    application_name: APPLICATION_NAME,
+    client_id: pending.clientId,
+    scopes: SCOPES,
+    public_key: publicKey.export({ type: 'spki', format: 'pem' }),
+    nonce: pending.nonce,
+    padding: 'oaep',
+  });
+  return { pending, url: `${config.forumUrl}/user-api-key/new?${params}` };
+}
+
+const big = (b64url) => BigInt(`0x${Buffer.from(b64url, 'base64url').toString('hex') || '0'}`);
+
+function modPow(base, exp, mod) {
+  let result = 1n;
+  let b = base % mod;
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % mod;
+    b = (b * b) % mod;
+    e >>= 1n;
+  }
+  return result;
+}
+
+/** RSA PKCS#1 v1.5 decryption, for forums too old for OAEP (Node refuses it natively). */
+function decryptPkcs1(privateKeyPem, data) {
+  const jwk = createPrivateKey(privateKeyPem).export({ format: 'jwk' });
+  const n = big(jwk.n);
+  const size = Buffer.from(jwk.n, 'base64url').length;
+  const m = modPow(BigInt(`0x${data.toString('hex')}`), big(jwk.d), n);
+  const em = Buffer.from(m.toString(16).padStart(size * 2, '0'), 'hex');
+  const sep = em.indexOf(0, 2);
+  if (em[0] !== 0 || em[1] !== 2 || sep < 10) throw new Error('padding');
+  return em.subarray(sep + 1);
+}
+
+/**
+ * Decrypts the code shown by the forum and checks its nonce.
+ * Returns the user API key.
+ */
+export function finishUserApiKey(pending, pasted) {
+  let text = String(pasted ?? '').trim();
+  if (/%[0-9A-Fa-f]{2}/.test(text)) text = decodeURIComponent(text);
+  text = text.replace(/^.*payload=/s, '').replace(/[^A-Za-z0-9+/=_-]/g, '');
+  const data = Buffer.from(text, 'base64');
+  if (data.length < 64) throw new Error('Code incomplet : copiez tout le code affiché par le forum.');
+
+  let plain;
+  try {
+    plain = privateDecrypt(
+      { key: pending.privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha1' },
+      data,
+    );
+  } catch {
+    try {
+      plain = decryptPkcs1(pending.privateKey, data);
+    } catch {
+      throw new Error('Code illisible : il ne correspond pas à la dernière demande. Recommencez la connexion.');
+    }
+  }
+  let payload;
+  try {
+    payload = JSON.parse(plain.toString('utf8'));
+  } catch {
+    throw new Error('Code illisible.');
+  }
+  if (payload.nonce !== pending.nonce) throw new Error('Code refusé : il ne correspond pas à cette demande.');
+  if (!payload.key) throw new Error('Le forum n’a pas donné de clé.');
+  return payload.key;
+}
+
+function userHeaders(auth) {
+  return {
+    'user-api-key': auth.key,
+    'user-api-client-id': auth.clientId,
+    accept: 'application/json',
+    'user-agent': USER_AGENT,
+  };
+}
+
+/** Username of the connected account. */
+export async function currentUser(config, auth) {
+  const response = await httpRequest(`${config.forumUrl}/session/current.json`, {
+    timeoutMs: config.httpTimeoutMs,
+    headers: userHeaders(auth),
+  });
+  if (!response.ok) throw new Error(`Le forum refuse la clé (réponse ${response.status}).`);
+  const data = await response.json();
+  return data?.current_user?.username ?? null;
+}
+
+export async function revokeUserApiKey(config, auth) {
+  await httpRequest(`${config.forumUrl}/user-api-key/revoke`, {
+    method: 'POST',
+    timeoutMs: config.httpTimeoutMs,
+    headers: userHeaders(auth),
+  });
+}
+
+/** Creates a topic with the user's key. Returns { id, url }. */
+export async function createTopic(config, auth, { categoryId, title, raw }) {
   const response = await httpRequest(`${config.forumUrl}/posts.json`, {
     method: 'POST',
     timeoutMs: config.httpTimeoutMs,
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'api-key': apiKey,
-      'api-username': username,
-      'user-agent': USER_AGENT,
-    },
+    headers: { ...userHeaders(auth), 'content-type': 'application/json' },
     body: JSON.stringify({ title, raw, ...(categoryId ? { category: Number(categoryId) } : {}) }),
   });
   const data = await response.json().catch(() => ({}));

@@ -36,6 +36,9 @@
     { "name": "en cours", "color": "fbca04", "description": "Développement en cours" },
     { "name": "publication", "color": "0e8a16", "description": "Prêt pour le store Gladys" }
   ],
+  "forum": {
+    "category_id": 33
+  },
   "claude": {
     "max_turns": 40
   }

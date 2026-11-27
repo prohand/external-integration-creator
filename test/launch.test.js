@@ -6,7 +6,9 @@ import { storeEntry } from './fakes/forum-store.js';
 test('a simulated launch runs every step and creates nothing', async () => {
   const world = await startWorld();
   try {
-    await world.call('PUT', 'settings', { claudeToken: 'sk-ant-oat01-secret-value', forumApiKey: 'forum-key-123', forumUsername: 'alice' });
+    await world.call('PUT', 'settings', { claudeToken: 'sk-ant-oat01-secret-value' });
+    await world.connectForum();
+    const writesBefore = world.writes().length;
     const { status, body } = await world.call('POST', 'launches', FORM);
     assert.equal(status, 200, JSON.stringify(body));
     assert.equal(body.simulate, true);
@@ -27,8 +29,9 @@ test('a simulated launch runs every step and creates nothing', async () => {
     assert.match(byId.issue.message, /Claude est sollicité/);
     assert.match(byId.reservation.message, /pas réservée/);
 
-    // Nothing was written anywhere, the idea is still free, no secret leaked.
-    assert.deepEqual(world.writes(), []);
+    // Nothing was written anywhere (the forum connection aside), no secret leaked.
+    assert.equal(world.writes().length, writesBefore);
+    assert.match(byId.forum.log.at(-1).message, /catégorie 33/);
     const dash = (await world.call('GET', 'dashboard')).body;
     assert.ok(dash.columns.free.some((i) => i.key === 'idea:28'));
     assert.ok(!JSON.stringify(done).includes('sk-ant-oat01-secret-value'));

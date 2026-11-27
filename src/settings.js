@@ -17,7 +17,8 @@ export function loadRepoSettings(file = REPO_SETTINGS_FILE) {
   }
 }
 
-export const SECRET_NAMES = ['claudeToken', 'forumApiKey'];
+// Secrets set from the settings form (the forum key comes from its own flow).
+export const SECRET_NAMES = ['claudeToken'];
 
 export const DEFAULT_SETTINGS = {
   owner: '',
@@ -32,7 +33,12 @@ export function publicSettings(state) {
   const secrets = Object.fromEntries(
     SECRET_NAMES.map((name) => [`${name}Set`, Boolean(state.secrets?.[name])]),
   );
-  return { ...settings, ...secrets };
+  return {
+    ...settings,
+    ...secrets,
+    forumConnected: Boolean(state.secrets?.forumUserApiKey),
+    forumPending: Boolean(state.secrets?.forumPending),
+  };
 }
 
 const TOPIC = /^[a-z0-9][a-z0-9-]{0,49}$/;
@@ -55,7 +61,6 @@ export function validateSettingsUpdate(body) {
     }
     settings.owner = owner;
   }
-  if (body.forumUsername !== undefined) settings.forumUsername = String(body.forumUsername).trim().slice(0, 60);
   if (body.forumCategoryId !== undefined) {
     const id = String(body.forumCategoryId).trim();
     if (id && !/^\d+$/.test(id)) throw new ApiError(400, 'Identifiant de catégorie du forum invalide (un nombre).');

@@ -18,6 +18,7 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 - [Installation avec Docker](#installation-avec-docker)
 - [Créer le jeton GitHub](#créer-le-jeton-github)
 - [Jeton Claude (abonnement Pro ou Max)](#jeton-claude-abonnement-pro-ou-max)
+- [Connecter son compte du forum](#connecter-son-compte-du-forum)
 - [Derrière un reverse proxy (exemple Pangolin)](#derrière-un-reverse-proxy-exemple-pangolin)
 - [Sauvegarder /data](#sauvegarder-data)
 - [Mode simulation](#mode-simulation)
@@ -127,6 +128,23 @@ Pour ménager les limites de l'abonnement, chaque exécution de Claude est limit
 
 ---
 
+## Connecter son compte du forum
+
+L'appli peut créer le sujet « Intégration externe - <Nom> » sur le [forum Gladys](https://community.gladysassistant.com) avec **votre propre compte**. Pas besoin d'une clé d'administrateur : l'appli demande au forum une clé personnelle (Discourse « User API Key »).
+
+1. Page **Réglages → Forum Gladys** : cliquez sur **Connecter mon compte du forum**.
+2. Cliquez sur **Ouvrir le forum et autoriser**. Connectez-vous au forum si besoin, puis cliquez sur **Autoriser**.
+3. Le forum affiche un code. Copiez-le en entier.
+4. Revenez dans l'appli, collez le code et cliquez sur **Valider le code**. L'appli affiche « Connecté en tant que … ».
+
+Bon à savoir :
+
+- la clé donne les droits de lecture et d'écriture sur le forum, avec votre compte. Elle reste dans `/data` et n'est jamais réaffichée ;
+- il n'y a pas d'adresse de retour : le code passe par copier-coller, rien n'a besoin d'être joignable depuis Internet ;
+- le code est chiffré : seule votre instance peut le lire ;
+- **Déconnecter** révoque la clé sur le forum. Vous pouvez aussi la révoquer depuis votre profil du forum (onglet **Applications**) ;
+- les sujets sont créés dans la catégorie **Development** par défaut, comme la plupart des sujets « Intégration externe » existants. Elle se change dans les Réglages.
+
 ## Derrière un reverse proxy (exemple Pangolin)
 
 L'appli écoute sur un seul port (`PORT`, 3000 par défaut). Elle gère :
@@ -190,7 +208,7 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
    - cochez les actions automatiques voulues.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
 4. **Mes intégrations** : toutes vos intégrations lancées et leur état. Une simulation peut être oubliée.
-5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, accès au forum. Les clés ne sont jamais réaffichées.
+5. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum et catégorie des sujets. Les clés ne sont jamais réaffichées.
 
 ## Mode simulation
 

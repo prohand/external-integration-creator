@@ -1070,20 +1070,140 @@ async function showSettings() {
           { hint: 'Pour ménager les limites de l’abonnement.' },
         ),
       ),
-      h(
-        'fieldset',
-        {},
-        h('legend', {}, 'Forum Gladys (Discourse)'),
-        field('Nom d’utilisateur', text('forumUsername')),
-        field('Identifiant de la catégorie', text('forumCategoryId', { inputmode: 'numeric' }), {
-          hint: 'Catégorie où créer les sujets « Intégration externe - … ».',
-        }),
-        secretField('Clé API du forum', 'forumApiKey', settings.forumApiKeySet, 'Jamais réaffichée.', values),
-      ),
+      forumFieldset(settings, values),
       message,
       h('div', { class: 'form-actions' }, h('button', { class: 'button button-primary', type: 'submit' }, 'Enregistrer')),
     ),
   );
+}
+
+/**
+ * Forum account: Discourse User API Key, by copy/paste (no callback URL,
+ * nothing exposed on the Internet).
+ */
+function forumFieldset(settings, values) {
+  const box = h('fieldset', {}, h('legend', {}, 'Forum Gladys'));
+  const status = h('div');
+  box.append(status);
+
+  const categorySelect = h(
+    'select',
+    {
+      onchange: (e) => {
+        values.forumCategoryId = e.target.value;
+      },
+    },
+    h('option', { value: settings.forumCategoryId || '' }, 'Chargement des catégories…'),
+  );
+  api('forum/categories').then(
+    ({ categories, defaultId }) => {
+      const current = settings.forumCategoryId || String(defaultId ?? '');
+      categorySelect.replaceChildren(
+        ...categories.map((c) => h('option', { value: String(c.id), selected: String(c.id) === current }, c.name)),
+      );
+    },
+    () => {
+      categorySelect.replaceChildren(h('option', { value: settings.forumCategoryId || '' }, 'Forum injoignable'));
+    },
+  );
+
+  const refresh = async () => {
+    state.status = await api('status');
+    showSettings();
+  };
+
+  if (settings.forumConnected) {
+    status.append(
+      h(
+        'p',
+        { class: 'alert alert-ok' },
+        `Connecté en tant que ${settings.forumUsername || '(inconnu)'}.`,
+      ),
+      h(
+        'button',
+        {
+          class: 'button small',
+          type: 'button',
+          onclick: async (e) => {
+            if (!confirm('Déconnecter le compte du forum ? La clé sera révoquée sur le forum.')) return;
+            e.target.disabled = true;
+            await api('forum/disconnect', { method: 'POST' }).catch((err) => alert(err.message));
+            refresh();
+          },
+        },
+        'Déconnecter',
+      ),
+    );
+  } else {
+    const error = h('div');
+    const link = h('p');
+    const paste = h('textarea', { rows: 4, placeholder: 'Collez ici le code affiché par le forum', spellcheck: 'false' });
+    const validate = h(
+      'button',
+      {
+        class: 'button button-primary small',
+        type: 'button',
+        onclick: async (e) => {
+          error.replaceChildren();
+          e.target.disabled = true;
+          try {
+            await api('forum/complete', { method: 'POST', body: { payload: paste.value } });
+            refresh();
+          } catch (err) {
+            error.replaceChildren(errorBox(err.message));
+            e.target.disabled = false;
+          }
+        },
+      },
+      'Valider le code',
+    );
+    const step2 = h(
+      'div',
+      { class: 'field', hidden: !settings.forumPending },
+      h('span', { class: 'field-label' }, '2. Collez le code affiché par le forum'),
+      paste,
+      h('div', {}, validate),
+      error,
+    );
+    const open = h(
+      'button',
+      {
+        class: 'button small',
+        type: 'button',
+        onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const { url } = await api('forum/connect', { method: 'POST' });
+            link.replaceChildren(
+              h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'button button-primary small' }, 'Ouvrir le forum et autoriser'),
+            );
+            step2.hidden = false;
+          } catch (err) {
+            error.replaceChildren(errorBox(err.message));
+          }
+          e.target.disabled = false;
+        },
+      },
+      settings.forumPending ? 'Recommencer la connexion' : 'Connecter mon compte du forum',
+    );
+    status.append(
+      h(
+        'p',
+        { class: 'muted small' },
+        'Chacun utilise son propre compte : l’appli demande au forum une clé personnelle (lecture et écriture). ' +
+          'Aucune adresse de retour : rien n’est exposé sur Internet.',
+      ),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, '1. Autoriser l’appli sur le forum'), h('div', {}, open), link),
+      step2,
+    );
+  }
+
+  box.append(
+    field('Catégorie des sujets « Intégration externe - … »', categorySelect, {
+      hint: 'Par défaut : Development, comme la plupart des sujets existants.',
+    }),
+  );
+  return box;
 }
 
 // --- router --------------------------------------------------------------------

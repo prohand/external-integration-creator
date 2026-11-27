@@ -323,10 +323,9 @@ async function stepClaudeSecret(ctx) {
 
 async function stepForumTopic(ctx) {
   const { integ } = ctx;
-  const apiKey = ctx.secrets.forumApiKey;
-  const username = ctx.settings.forumUsername;
-  if (!apiKey || !username) {
-    return { status: 'skipped', message: 'Sautée : clé du forum ou nom d’utilisateur non réglé.' };
+  const auth = { key: ctx.secrets.forumUserApiKey, clientId: ctx.secrets.forumClientId };
+  if (!auth.key) {
+    return { status: 'skipped', message: 'Sautée : compte du forum non connecté (Réglages).' };
   }
   if (integ.forumTopicId) return { message: `Sujet déjà créé : ${integ.links?.forum}` };
 
@@ -335,14 +334,13 @@ async function stepForumTopic(ctx) {
   const same = existing.find((t) => t.title.trim().toLowerCase() === title.toLowerCase());
   if (same) throw new Error(`Un sujet « ${same.title} » existe déjà : ${same.url}`);
 
+  const categoryId = ctx.settings.forumCategoryId || ctx.repoSettings.forum?.category_id || null;
   if (ctx.dryRun) {
-    ctx.log(`Simulation : POST ${ctx.config.forumUrl}/posts.json « ${title} »`);
+    ctx.log(`Simulation : POST ${ctx.config.forumUrl}/posts.json « ${title} » (catégorie ${categoryId ?? 'par défaut'})`);
     return { message: `Simulation : sujet « ${title} » créé.` };
   }
-  const topic = await createTopic(ctx.config, {
-    apiKey,
-    username,
-    categoryId: ctx.settings.forumCategoryId,
+  const topic = await createTopic(ctx.config, auth, {
+    categoryId,
     title,
     raw: forumPost({ ...integ, repoUrl: repoUrl(integ) }),
   });

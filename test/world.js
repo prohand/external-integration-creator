@@ -46,6 +46,11 @@ export async function startWorld({ env = {}, github = {}, forum = {}, store = {}
         await new Promise((r) => setTimeout(r, 20));
       }
     },
+    /** Connects the forum account like a user would (open, approve, paste). */
+    async connectForum(options) {
+      const { body } = await call('POST', 'forum/connect');
+      return call('POST', 'forum/complete', { payload: fakes.forum.approve(body.url, options) });
+    },
     writes() {
       // Requests that would change something on GitHub or the forum.
       return [...fakes.github.requests, ...fakes.forum.requests].filter((r) => r.method !== 'GET');

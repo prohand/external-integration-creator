@@ -8,14 +8,21 @@ import { fileURLToPath } from 'node:url';
 import { Cache } from './cache.js';
 import { STORE_CATEGORIES } from './categories.js';
 import { GitHub } from './github.js';
-import { log } from './log.js';
+import { log, registerSecret } from './log.js';
 import { defaultRepoName } from './names.js';
 import { checkName } from './launch/checks.js';
 import { KEYWORDS_MIN_GLADYS, dockerImage } from './launch/files.js';
 import { Runner, channelOf } from './launch/runner.js';
 import { OPTIONS, STEPS } from './launch/steps.js';
 import { validateLaunch } from './launch/validate.js';
-import { searchIntegrationTopics } from './sources/forum.js';
+import {
+  currentUser,
+  finishUserApiKey,
+  listCategories,
+  revokeUserApiKey,
+  searchIntegrationTopics,
+  startUserApiKey,
+} from './sources/forum.js';
 import { fetchStoreIndex } from './sources/store.js';
 import { buildBoard, fetchTracker } from './sources/tracker.js';
 import { loadRepoSettings, publicSettings, saveSettings } from './settings.js';
@@ -160,7 +167,7 @@ export function createApp({ config, db, hub = new Hub() }) {
       githubTokenSet: Boolean(config.githubToken),
       owner: await resolveOwner(),
       claudeTokenSet: Boolean(state.secrets.claudeToken),
-      forumReady: Boolean(state.secrets.forumApiKey && state.settings.forumUsername),
+      forumReady: Boolean(state.secrets.forumUserApiKey),
       cacheMinutes: config.cacheTtlMs / 60_000,
       categories: STORE_CATEGORIES,
       options: OPTIONS,
@@ -178,6 +185,56 @@ export function createApp({ config, db, hub = new Hub() }) {
     const result = await saveSettings(db, body ?? {});
     shortCache.clear('github:user');
     return result;
+  });
+
+  // --- forum account (Discourse User API Key, copy/paste: no callback URL) ---
+  router.get('/api/forum/categories', async () => {
+    const { value } = await cache.get('forum:categories', () => listCategories(config));
+    return { categories: value, defaultId: loadRepoSettings().forum?.category_id ?? null };
+  });
+
+  router.post('/api/forum/connect', async () => {
+    const { pending, url } = startUserApiKey(config);
+    await db.update((s) => {
+      s.secrets.forumPending = pending;
+    });
+    return { url };
+  });
+
+  router.post('/api/forum/complete', async ({ body }) => {
+    const pending = db.read().secrets.forumPending;
+    if (!pending) throw new ApiError(409, 'Aucune connexion en cours : cliquez d’abord sur « Ouvrir le forum ».');
+    let key;
+    try {
+      key = finishUserApiKey(pending, body?.payload);
+    } catch (err) {
+      throw new ApiError(400, err.message);
+    }
+    registerSecret(key);
+    const username = await currentUser(config, { key, clientId: pending.clientId });
+    await db.update((s) => {
+      s.secrets.forumUserApiKey = key;
+      s.secrets.forumClientId = pending.clientId;
+      delete s.secrets.forumPending;
+      s.settings.forumUsername = username ?? '';
+    });
+    return publicSettings(db.read());
+  });
+
+  router.post('/api/forum/disconnect', async () => {
+    const { secrets } = db.read();
+    if (secrets.forumUserApiKey) {
+      await revokeUserApiKey(config, { key: secrets.forumUserApiKey, clientId: secrets.forumClientId }).catch(
+        (err) => log.warn(`Révocation de la clé du forum impossible : ${err.message}`),
+      );
+    }
+    await db.update((s) => {
+      delete s.secrets.forumUserApiKey;
+      delete s.secrets.forumClientId;
+      delete s.secrets.forumPending;
+      s.settings.forumUsername = '';
+    });
+    return publicSettings(db.read());
   });
 
   router.get('/api/prefill', async ({ query }) => {
