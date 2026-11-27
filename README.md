@@ -31,7 +31,7 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 
 ## Installation avec Docker
 
-Prérequis : Docker avec le plugin `docker compose`. L'image est publiée sur `ghcr.io/prohand/external-integration-creator`, pour `amd64` et `arm64` (Raspberry Pi 4 ou 5 en 64 bits) : pas besoin de cloner le dépôt.
+Prérequis : Docker avec le plugin `docker compose`. L'image est publiée sur `ghcr.io/prohand/external-integration-creator`, pour `amd64` : pas besoin de cloner le dépôt. Sur une autre architecture (Raspberry Pi, par exemple), construisez l'image vous-même (voir plus bas).
 
 ```bash
 mkdir external-integration-creator && cd external-integration-creator
