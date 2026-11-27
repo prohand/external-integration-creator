@@ -3,7 +3,7 @@
 Petite application web, à héberger chez soi, pour la communauté [Gladys Assistant](https://gladysassistant.com) :
 
 1. trouver une **intégration externe libre** (personne ne travaille dessus) ;
-2. **lancer son développement en un clic** : dépôt GitHub, réglages, issue de suivi, sujet sur le forum… ;
+2. **lancer son développement en un clic** : dépôt GitHub, réglages, issue de suivi, annonce sur le forum… ;
 3. **suivre le développement en direct**, y compris quand Claude écrit le code ;
 4. **publier** l'intégration dans le store Gladys.
 
