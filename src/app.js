@@ -3,6 +3,7 @@
 // routes into one node:http server.
 // -----------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { Cache } from './cache.js';
@@ -43,7 +44,8 @@ import {
 } from './web.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
-export const APP_VERSION = '0.5.0';
+// Single source of the version: package.json (bumped by the Release workflow).
+export const APP_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 // Real launches (creating things on GitHub) can be switched off here.
 export const REAL_LAUNCH_READY = true;

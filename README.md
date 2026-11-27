@@ -74,7 +74,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Étiquettes de l'image : `latest` (dernière version de `main`), `X.Y.Z` et `X.Y` (versions publiées avec un tag `vX.Y.Z`).
+Étiquettes de l'image : `latest` (dernière release), `X.Y.Z` et `X.Y` (une version précise, pour ne pas changer de version sans le vouloir).
 
 Construire l'image soi-même (pour modifier le code) : clonez le dépôt, décommentez `build: .` dans `docker-compose.yml`, puis `docker compose up -d --build`.
 
@@ -298,6 +298,19 @@ npm run dev       # mode simulation, données dans ./data, redémarre à chaque 
 ```
 
 Node.js 22 ou plus. Pas de framework, pas d'étape de build : `src/` (serveur `node:http`) et `public/` (HTML, CSS et JavaScript natifs).
+
+## Publier une version de l'appli (mainteneurs)
+
+Deux workflows GitHub Actions :
+
+- **CI** (`.github/workflows/ci.yml`), à chaque push sur `main` et sur chaque pull request : syntaxe JavaScript, tests sur Node 22 et 24, construction de l'image Docker (sans la publier) ;
+- **Release** (`.github/workflows/release.yml`), lancé à la main : **Actions → Release → Run workflow**, sur `main`, puis le choix de version :
+  - `patch` (0.5.0 → 0.5.1), `minor` (→ 0.6.0) ou `major` (→ 1.0.0) ;
+  - `current` publie la version actuelle de `package.json` sans la changer (utile pour la toute première release).
+
+  Il lance les tests, commite la nouvelle version sur `main`, pose le tag `vX.Y.Z`, publie l'image `ghcr.io/…:X.Y.Z`, `:X.Y` et `:latest`, puis crée la release GitHub avec des notes générées automatiquement.
+
+Après la première release, rendez le paquet public une fois pour toutes : page du paquet → **Package settings → Danger Zone → Change visibility → Public**.
 
 ## Licence
 

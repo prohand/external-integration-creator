@@ -1,0 +1,137 @@
+# -----------------------------------------------------------------------------
+# Release, entirely from the GitHub UI: Actions → Release → Run workflow.
+#   1. runs the tests;
+#   2. computes the new version (patch / minor / major, or "current" to
+#      publish the version already in package.json), commits it on main and
+#      pushes the vX.Y.Z tag;
+#   3. publishes the image ghcr.io/<owner>/<repo>:X.Y.Z, :X.Y and :latest;
+#   4. creates the GitHub Release of the tag, with generated notes.
+# Everything runs in one workflow: a tag pushed with GITHUB_TOKEN does not
+# start other workflows.
+# -----------------------------------------------------------------------------
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version : patch (0.5.0 → 0.5.1), minor (→ 0.6.0), major (→ 1.0.0), current (version actuelle)'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - current
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the version, push the tag, create the release
+      packages: write # push the image to ghcr.io
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Compute the version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          if [ "$BUMP" != "current" ]; then
+            npm version "$BUMP" --no-git-tag-version > /dev/null
+          fi
+          version="$(node -p "require('./package.json').version")"
+          if git rev-parse -q --verify "refs/tags/v${version}" > /dev/null; then
+            echo "::error::La version ${version} existe déjà (tag v${version}) : choisissez patch, minor ou major."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Version : ${version}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit, tag and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add package.json package-lock.json
+            git commit -m "chore(release): ${VERSION}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          git tag -a "v${VERSION}" -m "Release ${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=External Integration Creator
+            org.opencontainers.image.description=Find, launch and follow external integrations for Gladys Assistant.
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION}"
+          gh release create "v${VERSION}" --verify-tag --title "v${VERSION}" --generate-notes \
+            --notes "Image Docker : \`${image}\`"
