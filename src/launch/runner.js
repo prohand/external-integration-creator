@@ -1,6 +1,7 @@
 // -----------------------------------------------------------------------------
-// Runs the launch steps of an integration, one after the other, saves every
-// state change in /data and pushes it live to the browser (SSE).
+// Runs a list of steps of an integration (the launch, or the publication),
+// one after the other, saves every state change in /data and pushes it live
+// to the browser (SSE).
 // -----------------------------------------------------------------------------
 
 import { randomUUID } from 'node:crypto';
@@ -10,19 +11,21 @@ import { STEPS } from './steps.js';
 
 const MAX_LOG_LINES = 200;
 const FINISHED = ['done', 'warning', 'skipped'];
+// Fields owned by the runners: never overwritten by a step's draft.
+const STEP_FIELDS = ['steps', 'publishSteps'];
 
 export const channelOf = (id) => `launch:${id}`;
 
-export function emptySteps() {
+export function emptySteps(defs = STEPS) {
   return Object.fromEntries(
-    STEPS.map((s) => [s.id, { status: 'todo', message: '', log: [], startedAt: null, finishedAt: null }]),
+    defs.map((s) => [s.id, { status: 'todo', message: '', log: [], startedAt: null, finishedAt: null }]),
   );
 }
 
-/** Global state of a launch, from its steps. */
-export function overallStatus(integ, running = false) {
+/** Global state of a list of steps. */
+export function overallStatus(integ, running = false, defs = STEPS, field = 'steps') {
   if (running) return 'running';
-  const steps = STEPS.map((s) => ({ ...s, state: integ.steps?.[s.id] }));
+  const steps = defs.map((s) => ({ ...s, state: integ[field]?.[s.id] }));
   if (steps.some((s) => s.state?.status === 'error')) return 'error';
   if (steps.some((s) => s.state?.status === 'todo' || s.state?.status === 'running')) return 'todo';
   if (steps.some((s) => s.state?.status === 'warning')) return 'warning';
@@ -40,11 +43,16 @@ export class Runner {
    * @param {import('../sse.js').Hub} opts.hub
    * @param {(integ, log) => Promise<object>} opts.context - builds the step context
    */
-  constructor({ db, hub, context }) {
+  constructor({ db, hub, context, steps = STEPS, field = 'steps', label = 'Ce lancement' }) {
     this.db = db;
     this.hub = hub;
     this.context = context;
+    this.steps = steps;
+    this.field = field;
+    this.label = label;
     this.active = new Map(); // id -> promise
+    this.decorate = (view) => view; // adds the other runner's summary
+    this.onChange = null; // replaces publish() when set
   }
 
   find(id) {
@@ -53,22 +61,37 @@ export class Runner {
     return integ;
   }
 
-  /** Public view of a launch (no secret is ever stored in it). */
-  view(integ) {
+  /** Status and steps of this runner for one integration. */
+  summary(integ) {
+    if (!integ[this.field]) return { status: null, stepList: [] };
     return {
-      ...integ,
-      status: overallStatus(integ, this.active.has(integ.id)),
-      stepList: STEPS.map((s) => ({
+      status: overallStatus(integ, this.active.has(integ.id), this.steps, this.field),
+      stepList: this.steps.map((s) => ({
         id: s.id,
         title: s.title,
         essential: Boolean(s.essential),
-        ...integ.steps[s.id],
+        ...integ[this.field][s.id],
       })),
     };
   }
 
+  /** Public view of a launch (no secret is ever stored in it). */
+  view(integ) {
+    return this.decorate({ ...integ, ...this.summary(integ) }, integ);
+  }
+
   publish(id) {
+    if (this.onChange) return this.onChange(id);
     this.hub.publish(channelOf(id), 'launch', this.view(this.find(id)));
+    return undefined;
+  }
+
+  /** Starts over with fresh steps (a new publication). */
+  async reset(id, fields = {}) {
+    await this.patchInteg(id, (integ) => {
+      Object.assign(integ, fields);
+      integ[this.field] = emptySteps(this.steps);
+    });
   }
 
   async create(fields) {
@@ -94,16 +117,16 @@ export class Runner {
 
   async patchStep(id, stepId, changes) {
     await this.patchInteg(id, (integ) => {
-      integ.steps[stepId] = { ...integ.steps[stepId], ...changes };
+      integ[this.field][stepId] = { ...integ[this.field][stepId], ...changes };
     });
     this.publish(id);
   }
 
   /** Runs every step not run yet, starting at index `from` (always run). */
   start(id, from = 0) {
-    if (this.active.has(id)) throw new ApiError(409, 'Ce lancement est déjà en cours.');
+    if (this.active.has(id)) throw new ApiError(409, `${this.label} est déjà en cours.`);
     const promise = this.run(id, from)
-      .catch((err) => log.error(`Lancement ${id} interrompu`, { error: err.message }))
+      .catch((err) => log.error(`${this.label} ${id} interrompu`, { error: err.message }))
       .finally(() => {
         this.active.delete(id);
         this.publish(id);
@@ -115,11 +138,12 @@ export class Runner {
 
   /** "Relancer" button: runs this step again, then the ones never run. */
   retry(id, stepId) {
-    const index = STEPS.findIndex((s) => s.id === stepId);
+    const index = this.steps.findIndex((s) => s.id === stepId);
     if (index < 0) throw new ApiError(404, 'Étape inconnue.');
     const integ = this.find(id);
-    const blocking = STEPS.slice(0, index).find(
-      (s) => s.essential && !FINISHED.includes(integ.steps[s.id]?.status) && stepEnabled(s, integ),
+    if (!integ[this.field]) throw new ApiError(409, 'Rien à relancer.');
+    const blocking = this.steps.slice(0, index).find(
+      (s) => s.essential && !FINISHED.includes(integ[this.field][s.id]?.status) && stepEnabled(s, integ),
     );
     if (blocking) {
       throw new ApiError(409, `Il faut d’abord réussir l’étape « ${blocking.title} ».`);
@@ -128,10 +152,10 @@ export class Runner {
   }
 
   async run(id, from) {
-    for (let i = from; i < STEPS.length; i += 1) {
-      const step = STEPS[i];
+    for (let i = from; i < this.steps.length; i += 1) {
+      const step = this.steps[i];
       let integ = this.find(id);
-      if (i > from && integ.steps[step.id].status !== 'todo') continue;
+      if (i > from && integ[this.field][step.id].status !== 'todo') continue;
 
       if (!stepEnabled(step, integ)) {
         await this.patchStep(id, step.id, {
@@ -160,7 +184,8 @@ export class Runner {
       const draft = structuredClone(integ);
       const saveInteg = () =>
         this.patchInteg(id, (target) => {
-          const { steps, ...fields } = draft;
+          const fields = { ...draft };
+          for (const f of STEP_FIELDS) delete fields[f];
           Object.assign(target, fields);
         });
       let outcome;
@@ -187,7 +212,7 @@ export class Runner {
   async recover() {
     await this.db.update((state) => {
       for (const integ of state.integrations) {
-        for (const step of Object.values(integ.steps ?? {})) {
+        for (const step of Object.values(integ[this.field] ?? {})) {
           if (step.status === 'running') {
             step.status = 'error';
             step.message = 'Interrompue par un redémarrage de l’appli : relancez-la.';

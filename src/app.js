@@ -25,7 +25,8 @@ import {
   searchTopicMentions,
   startUserApiKey,
 } from './sources/forum.js';
-import { reserveBatchMessage } from './launch/texts.js';
+import { releaseBatchMessage, reserveBatchMessage } from './launch/texts.js';
+import { PUBLISH_STEPS } from './publish/steps.js';
 import { fetchStoreIndex } from './sources/store.js';
 import { buildBoard, fetchTracker } from './sources/tracker.js';
 import { loadRepoSettings, publicSettings, saveSettings } from './settings.js';
@@ -42,7 +43,7 @@ import {
 } from './web.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
-export const APP_VERSION = '0.4.0';
+export const APP_VERSION = '0.5.0';
 
 // Real launches (creating things on GitHub) can be switched off here.
 export const REAL_LAUNCH_READY = true;
@@ -142,10 +143,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     github,
   };
 
-  const runner = new Runner({
-    db,
-    hub,
-    context: async (integ, addLine) => {
+  const buildContext = async (integ, addLine) => {
       const state = db.read();
       return {
         integ,
@@ -166,8 +164,20 @@ export function createApp({ config, db, hub = new Hub() }) {
         log: addLine,
         db,
       };
-    },
+  };
+
+  const runner = new Runner({ db, hub, context: buildContext });
+  const publisher = new Runner({
+    db,
+    hub,
+    context: buildContext,
+    steps: PUBLISH_STEPS,
+    field: 'publishSteps',
+    label: 'Cette publication',
   });
+  // One view and one SSE stream for both: launch + publication.
+  runner.decorate = (view, integ) => ({ ...view, publish: publisher.summary(integ) });
+  publisher.onChange = (id) => runner.publish(id);
 
   const monitor = new DevMonitor({
     hub,
@@ -276,27 +286,53 @@ export function createApp({ config, db, hub = new Hub() }) {
     return publicSettings(db.read());
   });
 
-  // --- batched announcements ("Je prends :") in the community topic ---
-  const pendingAnnouncements = (state) =>
-    state.integrations.filter((i) => !i.simulate && i.forum?.queuedAt && !i.forum?.announced);
+  // --- batched announcements in the community topic ---
+  // "reserve": "Je prends :" after a launch; "release": "sorties" after a publication.
+  const BATCHES = {
+    reserve: {
+      pending: (state) => state.integrations.filter((i) => !i.simulate && i.forum?.queuedAt && !i.forum?.announced),
+      message: reserveBatchMessage,
+      mark: (integ, post) => {
+        integ.forum = { ...integ.forum, announced: post };
+        integ.links = { ...integ.links, forum: post.url };
+      },
+    },
+    release: {
+      pending: (state) =>
+        state.integrations.filter(
+          (i) => !i.simulate && i.release && i.forum?.releaseQueuedAt && i.forum?.released?.version !== i.release.version,
+        ),
+      message: releaseBatchMessage,
+      mark: (integ, post) => {
+        integ.forum = { ...integ.forum, released: { ...post, version: integ.release.version } };
+      },
+    },
+  };
 
   router.get('/api/forum/batch', () => {
     const state = db.read();
-    const pending = pendingAnnouncements(state);
-    return {
-      pending: pending.map((i) => ({ id: i.id, displayName: i.displayName, repo: `${i.owner}/${i.repoName}` })),
-      message: pending.length ? reserveBatchMessage(pending) : '',
+    const out = {
       topicUrl: `${config.forumUrl}/t/${forumTopicId()}`,
       connected: Boolean(state.secrets.forumUserApiKey),
       dryRun: config.dryRun,
     };
+    for (const [kind, batch] of Object.entries(BATCHES)) {
+      const pending = batch.pending(state);
+      out[kind] = {
+        pending: pending.map((i) => ({ id: i.id, displayName: i.displayName, repo: `${i.owner}/${i.repoName}` })),
+        message: pending.length ? batch.message(pending) : '',
+      };
+    }
+    return out;
   });
 
   router.post('/api/forum/batch', async ({ body }) => {
+    const kind = body?.kind ?? 'reserve';
+    const batch = BATCHES[kind];
+    if (!batch) throw new ApiError(400, 'Type de message inconnu.');
     const state = db.read();
-    const pending = pendingAnnouncements(state);
     const ids = Array.isArray(body?.ids) ? body.ids : [];
-    const chosen = pending.filter((i) => ids.includes(i.id));
+    const chosen = batch.pending(state).filter((i) => ids.includes(i.id));
     if (!chosen.length) throw new ApiError(400, 'Aucune intégration à annoncer.');
     const raw = String(body?.raw ?? '').trim();
     if (raw.length < 10 || raw.length > 20_000) throw new ApiError(400, 'Message vide ou trop long.');
@@ -311,10 +347,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     const announced = { postNumber: post.postNumber, url: post.url, at: new Date().toISOString() };
     await db.update((s) => {
       for (const integ of s.integrations) {
-        if (chosen.some((c) => c.id === integ.id)) {
-          integ.forum = { ...integ.forum, announced };
-          integ.links = { ...integ.links, forum: post.url };
-        }
+        if (chosen.some((c) => c.id === integ.id)) batch.mark(integ, announced);
       }
     });
     shortCache.clear();
@@ -356,7 +389,7 @@ export function createApp({ config, db, hub = new Hub() }) {
       .read()
       .integrations.map((i) => runner.view(i))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(({ steps, ...rest }) => rest),
+      .map(({ steps, publishSteps, stepList, ...rest }) => ({ ...rest, publish: { status: rest.publish?.status ?? null } })),
   );
 
   // One click: everything filled from the tracker idea.
@@ -405,6 +438,26 @@ export function createApp({ config, db, hub = new Hub() }) {
 
   router.post('/api/launches/:id/steps/:step/retry', ({ params }) => {
     runner.retry(params.id, params.step);
+    return runner.view(runner.find(params.id));
+  });
+
+  // --- publication ("Publier") ---
+  router.post('/api/launches/:id/publish', async ({ params }) => {
+    const integ = realInteg(params.id, { needIssue: false });
+    if (runner.active.has(integ.id)) throw new ApiError(409, 'Le lancement est encore en cours.');
+    const launch = runner.summary(integ).status;
+    if (!['done', 'warning'].includes(launch)) {
+      throw new ApiError(409, 'Le lancement doit être terminé avant de publier (voir les étapes en erreur).');
+    }
+    if (!config.githubToken) throw new ApiError(400, 'Aucun jeton GitHub réglé (GITHUB_TOKEN).');
+    if (config.dryRun) throw new ApiError(409, 'Mode simulation (DRY_RUN) : la publication est désactivée.');
+    await publisher.reset(integ.id, { publishAttempt: { startedAt: new Date().toISOString() } });
+    publisher.start(integ.id);
+    return runner.view(runner.find(integ.id));
+  });
+
+  router.post('/api/launches/:id/publish/:step/retry', ({ params }) => {
+    publisher.retry(params.id, params.step);
     return runner.view(runner.find(params.id));
   });
 
@@ -538,5 +591,5 @@ export function createApp({ config, db, hub = new Hub() }) {
     hub.closeAll();
   });
 
-  return { server, router, cache, sources, dashboard, runner, hub, github, monitor };
+  return { server, router, cache, sources, dashboard, runner, publisher, hub, github, monitor };
 }

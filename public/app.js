@@ -820,9 +820,14 @@ function linkOrText(href, label, simulated) {
   return simulated ? h('span', { class: 'muted', title: 'Simulation : n’existe pas' }, label) : extLink(href, label);
 }
 
-function renderStep(step, integ) {
+/** Text with its https links made clickable (safe: text nodes + extLink). */
+function linkify(text) {
+  const parts = String(text ?? '').split(/(https:\/\/[^\s)]+[^\s).,;:])/g);
+  return parts.map((part, i) => (i % 2 ? extLink(part, part.replace(/^https:\/\/(www\.)?/, '')) : part));
+}
+
+function renderStep(step, integ, { retryPath = `launches/${integ.id}/steps/${step.id}/retry`, busy = integ.status === 'running' } = {}) {
   const lines = step.status === 'running' ? (follow.live[step.id] ?? []) : step.log ?? [];
-  const busy = integ.status === 'running';
   const detailsOpen = follow.open.has(step.id) || step.status === 'running';
   const preview = step.data?.preview;
   const checks = step.data?.checks;
@@ -878,7 +883,7 @@ function renderStep(step, integ) {
           onclick: async (e) => {
             e.target.disabled = true;
             try {
-              await api(`launches/${integ.id}/steps/${step.id}/retry`, { method: 'POST' });
+              await api(retryPath, { method: 'POST' });
             } catch (err) {
               alert(err.message);
               e.target.disabled = false;
@@ -888,8 +893,79 @@ function renderStep(step, integ) {
         'Relancer',
       ),
     ),
-    step.message ? h('p', { class: 'step-msg' }, step.message) : null,
+    step.message ? h('p', { class: 'step-msg' }, linkify(step.message)) : null,
     step.status !== 'todo' && (lines.length || preview || checks) ? details : null,
+  );
+}
+
+/** "Publier": one click, then every publication step follows. */
+function renderPublish(integ) {
+  if (integ.simulate) {
+    return h('p', { class: 'muted small' }, 'Simulation : la publication n’est possible que pour un vrai lancement.');
+  }
+  const publish = integ.publish ?? { status: null, stepList: [] };
+  const running = publish.status === 'running';
+  const launchOk = ['done', 'warning'].includes(integ.status);
+  const button = h(
+    'button',
+    {
+      class: 'button button-primary',
+      type: 'button',
+      disabled: running || !launchOk || publish.status === 'error',
+      title: !launchOk
+        ? 'Le lancement doit être terminé'
+        : publish.status === 'error'
+          ? 'Corrigez le problème puis cliquez sur « Relancer » sur l’étape en erreur'
+          : null,
+      onclick: async (e) => {
+        const again = integ.release ? ` (nouvelle version après la v${integ.release.version})` : '';
+        if (
+          !confirm(
+            `Publier « ${integ.displayName} » dans le store Gladys${again} ?\n\n` +
+              'L’appli lance le contrôle du store, la release, vérifie l’image, ajoute le topic officiel, puis suit l’indexeur.',
+          )
+        ) {
+          return;
+        }
+        e.currentTarget.disabled = true;
+        try {
+          follow.integ = await api(`launches/${integ.id}/publish`, { method: 'POST' });
+          renderFollow();
+        } catch (err) {
+          alert(err.message);
+          e.currentTarget.disabled = false;
+        }
+      },
+    },
+    integ.release ? 'Publier une nouvelle version' : 'Publier',
+  );
+  return h(
+    'section',
+    { class: 'publish' },
+    h(
+      'div',
+      { class: 'follow-head' },
+      h('h2', {}, 'Publication'),
+      publish.status ? statusBadge(publish.status, OVERALL_LABELS) : null,
+      h('span', { class: 'spacer' }),
+      button,
+    ),
+    publish.status === 'error'
+      ? h('p', { class: 'muted small' }, 'Corrigez le problème indiqué, puis cliquez sur « Relancer » sur l’étape en erreur : la publication reprend là où elle s’est arrêtée, sans refaire de version.')
+      : null,
+    publish.stepList.length
+      ? h(
+          'ol',
+          { class: 'steps' },
+          publish.stepList.map((step) =>
+            renderStep(step, integ, { retryPath: `launches/${integ.id}/publish/${step.id}/retry`, busy: running }),
+          ),
+        )
+      : h(
+          'p',
+          { class: 'muted small' },
+          'Quand le développement est fusionné sur la branche principale : un clic lance le contrôle du store, la release, la vérification de l’image, le topic officiel et le suivi de l’indexeur.',
+        ),
   );
 }
 
@@ -903,7 +979,8 @@ function renderFollow() {
     links.issue && linkOrText(links.issue, 'Issue de suivi', sim),
     links.actions && linkOrText(links.actions, 'Actions', sim),
     links.codespaces && linkOrText(links.codespaces, 'Ouvrir dans Codespaces', sim),
-    links.forum && linkOrText(links.forum, 'Sujet du forum', sim),
+    links.forum && linkOrText(links.forum, 'Annonce sur le forum', sim),
+    links.release && extLink(links.release, `Release v${integ.release?.version ?? ''}`),
   ].filter(Boolean);
 
   const tabs = h(
@@ -919,14 +996,7 @@ function renderFollow() {
   const body =
     follow.tab === 'dev'
       ? renderDev()
-      : [
-          h('ol', { class: 'steps' }, integ.stepList.map((step) => renderStep(step, integ))),
-          h(
-            'div',
-            { class: 'form-actions' },
-            h('button', { class: 'button', type: 'button', disabled: true, title: 'Arrive à la phase 5' }, 'Publier'),
-          ),
-        ];
+      : [h('ol', { class: 'steps' }, integ.stepList.map((step) => renderStep(step, integ))), renderPublish(integ)];
 
   setView(
     h('p', {}, h('a', { href: '#/mes-integrations' }, '← Mes intégrations')),
@@ -936,6 +1006,7 @@ function renderFollow() {
       h('h1', {}, integ.displayName),
       statusBadge(integ.status, OVERALL_LABELS),
       sim ? h('span', { class: 'badge badge-warn' }, 'Simulation') : null,
+      integ.release ? h('span', { class: 'badge st-done' }, `Publiée v${integ.release.version}`) : null,
     ),
     h('p', { class: 'muted' }, h('code', {}, `${integ.owner}/${integ.repoName}`), ` · lancé le ${formatDate(integ.createdAt)}`),
     linkItems.length ? h('p', { class: 'links' }, linkItems) : null,
@@ -1329,6 +1400,8 @@ async function showMine() {
         h('span', { class: 'muted small' }, `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}`),
       ),
       statusBadge(integ.status, OVERALL_LABELS),
+      integ.release ? h('span', { class: 'badge st-done' }, `Publiée v${integ.release.version}`) : null,
+      integ.publish?.status === 'running' ? h('span', { class: 'badge st st-running' }, 'Publication…') : null,
       integ.simulate ? h('span', { class: 'badge badge-warn' }, 'Simulation') : null,
       integ.simulate
         ? h(
@@ -1361,21 +1434,19 @@ async function showMine() {
   renderForumBatch();
 }
 
-/** "Je prends :" batch for the community topic, edited then posted on demand. */
-async function renderForumBatch() {
-  const host = document.getElementById('forum-batch');
-  if (!host) return;
-  let batch;
-  try {
-    batch = await api('forum/batch');
-  } catch (err) {
-    host.replaceChildren(errorBox(err.message));
-    return;
-  }
-  if (!batch.pending.length) {
-    host.replaceChildren();
-    return;
-  }
+const BATCH_TEXTS = {
+  reserve: {
+    title: (n) => `Annonces sur le forum : ${n} intégration${n > 1 ? 's' : ''} à annoncer`,
+    intro: 'Le message « Je prends : » réserve les intégrations lancées.',
+  },
+  release: {
+    title: (n) => `Sorties à annoncer sur le forum : ${n} intégration${n > 1 ? 's' : ''} publiée${n > 1 ? 's' : ''}`,
+    intro: 'Le message de sortie donne la version et le lien de chaque intégration publiée.',
+  },
+};
+
+/** One batch message ("Je prends :" or "sorties") for the community topic. */
+function batchSection(kind, batch, info) {
   const chosen = new Set(batch.pending.map((p) => p.id));
   const text = h('textarea', { rows: Math.min(14, 4 + batch.pending.length), spellcheck: 'true' });
   text.value = batch.message;
@@ -1385,14 +1456,14 @@ async function renderForumBatch() {
     {
       class: 'button button-primary',
       type: 'button',
-      disabled: !batch.connected,
+      disabled: !info.connected,
       onclick: async (e) => {
         const count = chosen.size;
         if (!count) return;
         if (!confirm(`Poster ce message public dans le sujet des intégrations du forum Gladys (${count} intégration${count > 1 ? 's' : ''}) ?`)) return;
         e.target.disabled = true;
         try {
-          const done = await api('forum/batch', { method: 'POST', body: { ids: [...chosen], raw: text.value } });
+          const done = await api('forum/batch', { method: 'POST', body: { kind, ids: [...chosen], raw: text.value } });
           if (done.simulated) {
             result.replaceChildren(h('p', { class: 'alert alert-warn' }, 'Mode simulation : rien n’a été posté.'));
             e.target.disabled = false;
@@ -1407,106 +1478,59 @@ async function renderForumBatch() {
     },
     'Poster sur le forum',
   );
-  host.replaceChildren(
-    h(
-      'section',
-      { class: 'batch' },
-      h('h2', {}, `Annonces sur le forum : ${batch.pending.length} intégration${batch.pending.length > 1 ? 's' : ''} à annoncer`),
-      h(
-        'p',
-        { class: 'muted small' },
-        'Comme les autres contributeurs, on annonce par lot dans ',
-        extLink(batch.topicUrl, 'le sujet des intégrations candidates'),
-        '. Relisez et modifiez le message avant de le poster.',
-      ),
-      h(
-        'div',
-        { class: 'options' },
-        batch.pending.map((p) =>
-          h(
-            'label',
-            { class: 'check-line' },
-            h('input', {
-              type: 'checkbox',
-              checked: true,
-              onchange: (e) => {
-                if (e.target.checked) chosen.add(p.id);
-                else chosen.delete(p.id);
-              },
-            }),
-            ` ${p.displayName} `,
-            h('span', { class: 'muted small' }, p.repo),
-          ),
-        ),
-      ),
-      text,
-      batch.connected
-        ? null
-        : h('p', { class: 'alert alert-warn' }, 'Connectez d’abord votre compte du forum dans ', h('a', { href: '#/reglages' }, 'Réglages'), '.'),
-      result,
-      h('div', { class: 'form-actions' }, post),
-    ),
-  );
-}
-
-const PERM_ICONS = { ok: '✓', missing: '✗', unknown: '?' };
-
-/** "Tester le jeton": probes every right without changing anything. */
-function tokenCheckBox() {
-  const result = h('div');
-  const button = h(
-    'button',
-    {
-      class: 'button',
-      type: 'button',
-      onclick: async () => {
-        button.disabled = true;
-        result.replaceChildren(loading('Test en cours…'));
-        try {
-          const r = await api('github/check', { method: 'POST' });
-          result.replaceChildren(
-            h('p', { class: `alert ${r.ok ? 'alert-ok' : 'alert-warn'}` }, r.message ?? (r.ok ? 'Jeton valide.' : '')),
-            r.login
-              ? h(
-                  'p',
-                  { class: 'small muted' },
-                  `Compte du jeton : ${r.login} · cible : ${r.owner} · type : ${r.tokenType}`,
-                  r.expiresAt ? ` · expire le ${formatDate(r.expiresAt)}` : '',
-                )
-              : null,
-            r.permissions?.length
-              ? h(
-                  'ul',
-                  { class: 'checks' },
-                  r.permissions.map((p) =>
-                    h(
-                      'li',
-                      { class: `check check-${p.status === 'ok' ? 'ok' : p.status === 'missing' ? 'ko' : 'unknown'}` },
-                      h('span', { class: 'check-icon', 'aria-hidden': 'true' }, PERM_ICONS[p.status]),
-                      h('strong', {}, `${p.label}${p.level ? ` (${p.level === 'write' ? 'écriture' : 'lecture'})` : ''}`),
-                      ' ',
-                      h('span', { class: 'muted' }, `sert à ${p.use}`),
-                      p.note ? h('span', { class: 'small muted' }, ` — ${p.note}`) : null,
-                    ),
-                  ),
-                )
-              : null,
-          );
-        } catch (err) {
-          result.replaceChildren(errorBox(err.message));
-        }
-        button.disabled = false;
-      },
-    },
-    'Tester le jeton GitHub',
-  );
+  const texts = BATCH_TEXTS[kind];
   return h(
     'section',
     { class: 'batch' },
-    h('h2', {}, 'Jeton GitHub'),
-    h('p', { class: 'muted small' }, 'Le test essaie chaque droit sur un de vos dépôts, avec des requêtes invalides : rien n’est modifié.'),
-    h('div', {}, button),
+    h('h2', {}, texts.title(batch.pending.length)),
+    h(
+      'p',
+      { class: 'muted small' },
+      `${texts.intro} On annonce par lot dans `,
+      extLink(info.topicUrl, 'le sujet des intégrations candidates'),
+      '. Relisez et modifiez le message avant de le poster.',
+    ),
+    h(
+      'div',
+      { class: 'options' },
+      batch.pending.map((p) =>
+        h(
+          'label',
+          { class: 'check-line' },
+          h('input', {
+            type: 'checkbox',
+            checked: true,
+            onchange: (e) => {
+              if (e.target.checked) chosen.add(p.id);
+              else chosen.delete(p.id);
+            },
+          }),
+          ` ${p.displayName} `,
+          h('span', { class: 'muted small' }, p.repo),
+        ),
+      ),
+    ),
+    text,
+    info.connected
+      ? null
+      : h('p', { class: 'alert alert-warn' }, 'Connectez d’abord votre compte du forum dans ', h('a', { href: '#/reglages' }, 'Réglages'), '.'),
     result,
+    h('div', { class: 'form-actions' }, post),
+  );
+}
+
+async function renderForumBatch() {
+  const host = document.getElementById('forum-batch');
+  if (!host) return;
+  let info;
+  try {
+    info = await api('forum/batch');
+  } catch (err) {
+    host.replaceChildren(errorBox(err.message));
+    return;
+  }
+  host.replaceChildren(
+    ...['reserve', 'release'].filter((kind) => info[kind].pending.length).map((kind) => batchSection(kind, info[kind], info)),
   );
 }
 

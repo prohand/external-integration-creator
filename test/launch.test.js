@@ -31,7 +31,7 @@ test('a simulated launch runs every step and creates nothing', async () => {
 
     // Nothing was written anywhere (the forum connection aside), no secret leaked.
     assert.equal(world.writes().length, writesBefore);
-    assert.equal((await world.call('GET', 'forum/batch')).body.pending.length, 0, 'simulations are never announced');
+    assert.equal((await world.call('GET', 'forum/batch')).body.reserve.pending.length, 0, 'simulations are never announced');
     const dash = (await world.call('GET', 'dashboard')).body;
     assert.ok(dash.columns.free.some((i) => i.key === 'idea:28'));
     assert.ok(!JSON.stringify(done).includes('sk-ant-oat01-secret-value'));

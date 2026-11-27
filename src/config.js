@@ -25,6 +25,10 @@ const DEFAULTS = {
   BRANCH_WAIT_SECONDS: '90',
   BRANCH_POLL_MS: '2000',
   DEV_POLL_SECONDS: '20',
+  GHCR_URL: 'https://ghcr.io',
+  PUBLISH_POLL_SECONDS: '10',
+  STORE_CHECK_TIMEOUT_MINUTES: '15',
+  RELEASE_TIMEOUT_MINUTES: '60',
 };
 
 function bool(value) {
@@ -89,5 +93,9 @@ export function loadConfig(env = process.env) {
     branchWaitMs: positiveNumber('BRANCH_WAIT_SECONDS', get('BRANCH_WAIT_SECONDS')) * 1000,
     branchPollMs: positiveNumber('BRANCH_POLL_MS', get('BRANCH_POLL_MS')),
     devPollMs: positiveNumber('DEV_POLL_SECONDS', get('DEV_POLL_SECONDS')) * 1000,
+    ghcrUrl: trimSlash(get('GHCR_URL')),
+    publishPollMs: positiveNumber('PUBLISH_POLL_SECONDS', get('PUBLISH_POLL_SECONDS')) * 1000,
+    storeCheckTimeoutMs: positiveNumber('STORE_CHECK_TIMEOUT_MINUTES', get('STORE_CHECK_TIMEOUT_MINUTES')) * 60_000,
+    releaseTimeoutMs: positiveNumber('RELEASE_TIMEOUT_MINUTES', get('RELEASE_TIMEOUT_MINUTES')) * 60_000,
   });
 }

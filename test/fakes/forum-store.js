@@ -96,3 +96,21 @@ export function storeEntry(owner, repo, name, keywords = []) {
     manifest: { name, keywords },
   };
 }
+
+/** Fake ghcr.io: anonymous token, then the manifest (public images only). */
+export async function startFakeGhcr() {
+  const fake = await startFake(({ method, path, query, headers }) => {
+    if (path === '/token') {
+      const repo = /repository:([^:]+):pull/.exec(query.get('scope') ?? '')?.[1];
+      return { body: { token: `anon-${repo}` } };
+    }
+    const m = /^\/v2\/(.+)\/manifests\/(.+)$/.exec(path);
+    if (m && (method === 'HEAD' || method === 'GET')) {
+      const ok = fake.public.has(m[1]) && headers.authorization === `Bearer anon-${m[1]}`;
+      return ok ? { body: {} } : { status: 401, body: { errors: [{ code: 'UNAUTHORIZED' }] } };
+    }
+    return undefined;
+  });
+  fake.public = new Set();
+  return fake;
+}

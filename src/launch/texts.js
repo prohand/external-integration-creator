@@ -378,3 +378,24 @@ export function reserveBatchMessage(items) {
   const lines = items.map((i) => `- ${mdInline(i.displayName)} : ${mdInline(i.description.fr)}`);
   return `Je prends :\n\n${lines.join('\n')}\n`;
 }
+
+/**
+ * "sorties" message, posted in batch in the community topic, like
+ * "Les 10 réservées au n° 550 sont sorties en v1.0.0".
+ */
+export function releaseBatchMessage(items) {
+  const posts = [...new Set(items.map((i) => i.forum?.announced?.postNumber).filter(Boolean))];
+  const versions = [...new Set(items.map((i) => i.release?.version))];
+  const n = items.length;
+  const where = posts.length === 1 ? ` réservée${n > 1 ? 's' : ''} au n° ${posts[0]}` : '';
+  if (n === 1) {
+    const [i] = items;
+    return `${mdInline(i.displayName)}${where} est sortie en v${versions[0]} : ${mdInline(i.description.fr)} https://github.com/${i.owner}/${i.repoName}\n`;
+  }
+  const head = `Les ${n}${where} sont sorties${versions.length === 1 ? ` en v${versions[0]}` : ''} :`;
+  const lines = items.map(
+    (i) =>
+      `- ${mdInline(i.displayName)}${versions.length > 1 ? ` (v${i.release?.version})` : ''} : ${mdInline(i.description.fr)} https://github.com/${i.owner}/${i.repoName}`,
+  );
+  return `${head}\n\n${lines.join('\n')}\n`;
+}

@@ -9,7 +9,7 @@ Petite application web, à héberger chez soi, pour la communauté [Gladys Assis
 
 Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'instance publique, et aucune donnée n'est partagée.
 
-> **État du projet** : phase 4 sur 5. Le tableau de bord, le lancement (en simulation et en réel), les annonces sur le forum et le suivi en direct du développement par Claude marchent. La publication arrive à la phase 5.
+> **État du projet** : les 5 phases sont faites : tableau de bord, lancement en 1 clic (simulation ou réel), annonces sur le forum, suivi en direct du développement par Claude, publication dans le store. Tout est testé contre de faux serveurs ; le premier vrai lancement servira de test en conditions réelles.
 
 ---
 
@@ -19,6 +19,7 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 - [Créer le jeton GitHub](#créer-le-jeton-github)
 - [Jeton Claude (abonnement Pro ou Max)](#jeton-claude-abonnement-pro-ou-max)
 - [Suivre le développement en direct](#suivre-le-développement-en-direct)
+- [Publier dans le store](#publier-dans-le-store)
 - [Connecter son compte du forum](#connecter-son-compte-du-forum)
 - [Derrière un reverse proxy (exemple Pangolin)](#derrière-un-reverse-proxy-exemple-pangolin)
 - [Sauvegarder /data](#sauvegarder-data)
@@ -158,6 +159,20 @@ Bon à savoir :
 - GitHub est relu **toutes les 20 secondes, seulement quand la page est ouverte** (`DEV_POLL_SECONDS`). Il n'y a pas de webhook : rien à ouvrir sur Internet. Les relectures sans changement ne comptent pas dans la limite d'appels GitHub (réponses 304) ;
 - les commits poussés par Claude (avec le jeton du workflow) ne déclenchent pas la CI tout seuls : l'appli lance la CI (`ci.yml`) sur chaque nouveau commit de la branche de Claude.
 
+## Publier dans le store
+
+Quand le travail de Claude est fusionné sur la branche principale, un clic sur **Publier** (écran de suivi, onglet Lancement) enchaîne :
+
+1. **Vérifier que tout est prêt** : aucune pull request ouverte, et du code développé sur la branche principale. Sinon, l'appli refuse : elle ne publie jamais le code de démonstration du modèle.
+2. **Contrôle du store** : le workflow `store-check.yml` lance `npx github:GladysAssistant/integration-store . --skip-image-check` sur GitHub. Les erreurs trouvées sont affichées telles quelles.
+3. **Release** : le workflow `release.yml` du modèle, en `minor` (réglable dans `config/repo-settings.json`, `publish.release_type`). L'appli suit l'exécution jusqu'au bout (construction de l'image comprise).
+4. **Image téléchargeable sans compte** : l'appli vérifie que `ghcr.io/<compte>/<dépôt>:<version>` se télécharge sans identifiant. Si le paquet est privé, elle affiche le lien vers ses réglages : **Danger Zone → Change visibility → Public**, puis **Relancer**.
+5. **Topic officiel** : `gladys-integration-wip` est remplacé par `gladys-assistant-integration`. L'indexeur du store peut alors trouver l'intégration.
+6. **Indexeur du store** : l'appli lit `rejected.json` et affiche la raison si l'indexeur refuse l'intégration. Si elle n'est pas encore indexée, **Relancer** vérifie à nouveau plus tard.
+7. **Annonce de la sortie** : l'intégration rejoint le prochain message de sortie du forum (« … sont sorties en v1.1.0 »), à poster depuis **Mes intégrations**, comme le message « Je prends : ».
+
+Si une étape échoue, corrigez le problème puis cliquez sur **Relancer** sur cette étape : la publication reprend là où elle s'est arrêtée. Une release en échec est relancée sur la même version (« re-run failed jobs ») : jamais deux montées de version pour une seule publication.
+
 ## Connecter son compte du forum
 
 Sur le forum Gladys, on n'ouvre **pas un sujet par intégration**. Les lancements s'annoncent **par lot**, dans [le sujet des intégrations candidates](https://community.gladysassistant.com/t/integrations-home-assistant-les-plus-populaires-candidates-pour-des-integrations-externes-gladys/10385), avec un message « Je prends : » qui liste les intégrations.
@@ -247,6 +262,7 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
 2. **Personnaliser…** (lien sous le bouton Lancer) ouvre le formulaire : nom, dépôt et vérification du nom en direct. Le reste (descriptions, catégories, mots-clés, cahier des charges, actions automatiques, simulation) est dans le bloc **Avancé**, replié.
 3. **Suivi** : les 14 étapes s'affichent en direct, avec leur état (fait, en cours, attention, erreur, à faire). Chaque étape a un bouton **Relancer** et un journal. En simulation, l'étape « Personnaliser » montre le contenu exact des fichiers qui seraient écrits.
 4. **Suivi, onglet Développement** : voir [Suivre le développement en direct](#suivre-le-développement-en-direct).
+   Le bouton **Publier**, sous les étapes du lancement : voir [Publier dans le store](#publier-dans-le-store).
 5. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
 6. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.
 

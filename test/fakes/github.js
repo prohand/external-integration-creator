@@ -113,6 +113,53 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
     repo.runs.unshift(r);
     return r;
   };
+  /** A commit on a branch (e.g. Claude's work merged on main). */
+  fake.commitTo = (full, branch, files, message = 'Work') => {
+    const repo = repoOf(full);
+    const base = filesOf(repo, branch) ?? {};
+    const treeSha = sha(JSON.stringify({ ...base, ...files }) + Math.random());
+    trees.set(treeSha, { ...base, ...files });
+    const commitSha = sha(`${treeSha}:${message}`);
+    commits.set(commitSha, { tree: treeSha, parents: [repo.refs[branch]], message });
+    repo.refs[branch] = commitSha;
+    return commitSha;
+  };
+  // What the dispatched workflows do (overridable per test).
+  fake.storeCheck = { conclusion: 'success', log: '2026-01-01T00:00:00.0000000Z [warning] docker_image: registry check skipped\n' };
+  fake.release = { conclusion: 'success', bump: 'minor' };
+  fake.onDispatch = (full, workflow, body) => {
+    const repo = repoOf(full);
+    if (workflow === 'store-check.yml') {
+      const failed = fake.storeCheck.conclusion !== 'success';
+      fake.addRun(full, {
+        path: '.github/workflows/store-check.yml',
+        event: 'workflow_dispatch',
+        conclusion: fake.storeCheck.conclusion,
+        jobs: [{ name: 'store-check', conclusion: fake.storeCheck.conclusion, log: fake.storeCheck.log, steps: [{ name: 'Store admission checks', conclusion: failed ? 'failure' : 'success' }] }],
+      });
+    }
+    if (workflow === 'release.yml') {
+      const files = filesOf(repo, body.ref);
+      const manifest = JSON.parse(files['gladys-assistant-integration.json']);
+      const [major, minor, patch] = manifest.version.split('.').map(Number);
+      const version = fake.release.bump === 'minor' ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
+      manifest.version = version;
+      manifest.docker_image = manifest.docker_image.replace(/:[^:]+$/, `:${version}`);
+      fake.commitTo(full, body.ref, { 'gladys-assistant-integration.json': `${JSON.stringify(manifest, null, 2)}\n` }, `chore(release): ${version}`);
+      fake.lastReleaseVersion = version;
+      const failed = fake.release.conclusion !== 'success';
+      fake.addRun(full, {
+        path: '.github/workflows/release.yml',
+        event: 'workflow_dispatch',
+        conclusion: fake.release.conclusion,
+        jobs: [
+          { name: 'prepare', conclusion: 'success' },
+          { name: 'build / build', conclusion: failed ? 'failure' : 'success', steps: [{ name: 'Build and push', conclusion: failed ? 'failure' : 'success' }] },
+        ],
+      });
+    }
+  };
+
   fake.pushBranch = (full, branch, commits, files) => {
     const repo = repoOf(full);
     const list = commits.map((message, i) => ({ sha: sha(`${branch}:${message}:${i}`), message, date: new Date(Date.now() + i * 1000).toISOString() }));
@@ -323,12 +370,34 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       return { body: { total_count: runs.length, workflow_runs: runs.map(({ jobs, ...r }) => r) } };
     }
     if ((m = /^\/actions\/workflows\/([\w.-]+)\/dispatches$/.exec(rest)) && method === 'POST') {
+      if (!['ci.yml', 'store-check.yml', 'release.yml'].includes(m[1])) return { status: 404, body: { message: 'Not Found' } };
       repo.dispatches.push({ workflow: m[1], ...body });
+      fake.onDispatch(full, m[1], body);
       return { status: 204, body: '' };
     }
     if (rest === '/actions/runs' && method === 'GET') {
       const runs = repo.runs.filter((r) => !query.get('head_sha') || r.head_sha === query.get('head_sha'));
       return { body: { workflow_runs: runs.map(({ jobs, ...r }) => r) } };
+    }
+    if ((m = /^\/actions\/runs\/(\d+)$/.exec(rest)) && method === 'GET') {
+      const run = repo.runs.find((r) => r.id === Number(m[1]));
+      if (!run) return { status: 404, body: {} };
+      const { jobs, ...view } = run;
+      return { body: view };
+    }
+    if ((m = /^\/actions\/runs\/(\d+)\/rerun-failed-jobs$/.exec(rest)) && method === 'POST') {
+      const run = repo.runs.find((r) => r.id === Number(m[1]));
+      run.conclusion = 'success';
+      for (const job of run.jobs) {
+        job.conclusion = 'success';
+        for (const st of job.steps) st.conclusion = 'success';
+      }
+      fake.reruns = (fake.reruns ?? 0) + 1;
+      return { status: 201, body: '' };
+    }
+    if (rest === '/commits' && method === 'GET') {
+      const head = repo.refs[query.get('sha') ?? repo.default_branch];
+      return { body: head ? [{ sha: head, commit: { message: commits.get(head)?.message ?? 'Initial commit' } }] : [] };
     }
     if ((m = /^\/actions\/runs\/(\d+)\/jobs$/.exec(rest)) && method === 'GET') {
       const run = repo.runs.find((r) => r.id === Number(m[1]));
@@ -338,7 +407,10 @@ export async function startFakeGitHub({ login = 'alice', ownerType = 'User', isT
       // Like GitHub: a redirect to the log file.
       return { status: 302, headers: { location: `/_logs/${full}/${m[1]}` }, body: '' };
     }
-    if (rest === '/pulls' && method === 'GET') return { body: [...repo.pulls].reverse() };
+    if (rest === '/pulls' && method === 'GET') {
+      const state = query.get('state') ?? 'open';
+      return { body: [...repo.pulls].reverse().filter((p) => state === 'all' || p.state === state) };
+    }
     if (rest === '/pulls' && method === 'POST') {
       if (repo.pulls.some((p) => p.head.ref === body.head && p.state === 'open')) {
         return { status: 422, body: { message: 'A pull request already exists' } };

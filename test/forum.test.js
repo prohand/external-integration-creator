@@ -83,17 +83,17 @@ test('launches are announced together in one "Je prends" reply of the topic', as
     await queueReal(world, 'Velux');
     await queueReal(world, 'Oral-B');
     const batch = (await world.call('GET', 'forum/batch')).body;
-    assert.deepEqual(batch.pending.map((p) => p.displayName), ['Velux', 'Oral-B']);
-    assert.equal(batch.message, 'Je prends :\n\n- Velux : Velux dans Gladys, en local.\n- Oral-B : Oral-B dans Gladys, en local.\n');
+    assert.deepEqual(batch.reserve.pending.map((p) => p.displayName), ['Velux', 'Oral-B']);
+    assert.equal(batch.reserve.message, 'Je prends :\n\n- Velux : Velux dans Gladys, en local.\n- Oral-B : Oral-B dans Gladys, en local.\n');
     assert.equal(batch.topicUrl, `${world.forum.url}/t/10385`);
     assert.equal(batch.connected, false);
 
-    const ids = batch.pending.map((p) => p.id);
-    const refused = await world.call('POST', 'forum/batch', { ids, raw: batch.message });
+    const ids = batch.reserve.pending.map((p) => p.id);
+    const refused = await world.call('POST', 'forum/batch', { ids, raw: batch.reserve.message });
     assert.equal(refused.status, 400, 'the forum account must be connected');
 
     await world.connectForum();
-    const edited = `${batch.message}\nMerci !`;
+    const edited = `${batch.reserve.message}\nMerci !`;
     const posted = await world.call('POST', 'forum/batch', { ids: [ids[0]], raw: edited });
     assert.equal(posted.status, 200, JSON.stringify(posted.body));
     assert.equal(posted.body.postNumber, 1);
@@ -103,7 +103,7 @@ test('launches are announced together in one "Je prends" reply of the topic', as
 
     // Only the remaining one is still waiting.
     const after = (await world.call('GET', 'forum/batch')).body;
-    assert.deepEqual(after.pending.map((p) => p.displayName), ['Oral-B']);
+    assert.deepEqual(after.reserve.pending.map((p) => p.displayName), ['Oral-B']);
     const velux = (await world.call('GET', 'launches/id-Velux')).body;
     assert.equal(velux.forum.announced.postNumber, 1);
     assert.equal(velux.links.forum, posted.body.url);

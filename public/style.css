@@ -849,3 +849,17 @@ progress {
   cursor: pointer;
   color: var(--muted);
 }
+
+/* --- publication ------------------------------------------------------------------ */
+
+.publish {
+  margin-top: 1.5rem;
+  max-width: 1000px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.publish h2 {
+  font-size: 1.15rem;
+}

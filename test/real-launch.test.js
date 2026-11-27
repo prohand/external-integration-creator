@@ -57,7 +57,7 @@ test('a real launch creates and sets up the repository, end to end', async () =>
     assert.equal(oral.reservedLocally, true);
     assert.equal(oral.repo, 'alice/gladys-oral-b');
     const batch = (await world.call('GET', 'forum/batch')).body;
-    assert.deepEqual(batch.pending.map((p) => p.displayName), ['Oral-B']);
+    assert.deepEqual(batch.reserve.pending.map((p) => p.displayName), ['Oral-B']);
     assert.ok(!JSON.stringify(done).includes('real-secret'));
 
     // The same repository cannot be launched twice.

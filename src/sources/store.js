@@ -17,6 +17,7 @@ export async function fetchStoreIndex(config) {
     slug: entry.store_slug ?? '',
     repoUrl: entry.repo_url ?? '',
     name: entry.manifest?.name ?? '',
+    version: entry.manifest?.version ?? null,
     keywords: Array.isArray(entry.manifest?.keywords) ? entry.manifest.keywords : [],
   }));
 }
