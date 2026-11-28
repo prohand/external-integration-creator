@@ -18,7 +18,7 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 - [Installation avec Docker](#installation-avec-docker)
 - [Comptes, double authentification et passkeys](#comptes-double-authentification-et-passkeys)
 - [Créer le jeton GitHub](#créer-le-jeton-github)
-- [Jeton Claude (abonnement Pro ou Max)](#jeton-claude-abonnement-pro-ou-max)
+- [Jeton Claude (abonnement Pro, Max, Team ou Enterprise)](#jeton-claude-abonnement-pro-max-team-ou-enterprise)
 - [Suivre le développement en direct](#suivre-le-développement-en-direct)
 - [Publier dans le store](#publier-dans-le-store)
 - [Connecter son compte du forum](#connecter-son-compte-du-forum)
@@ -111,6 +111,7 @@ L'appli agit avec votre jeton GitHub : chaque personne a son propre compte, prot
 - application d'authentification (TOTP : Aegis, 2FAS, Google Authenticator, Bitwarden…) : QR code à scanner, puis un code pour confirmer ;
 - clés d'accès : ajouter, renommer, supprimer ;
 - 10 codes de secours (un seul usage chacun), à régénérer si besoin ;
+- jeton Claude personnel (voir [Jeton Claude](#jeton-claude-abonnement-pro-max-team-ou-enterprise)) ;
 - changement du mot de passe (ferme les autres sessions) ;
 - sessions ouvertes (appareil, adresse IP, dernière activité), à fermer à distance.
 
@@ -120,7 +121,7 @@ Les changements sensibles redemandent le mot de passe si la connexion date de pl
 
 | Rôle | Peut |
 | --- | --- |
-| Administrateur | tout, dont les comptes, les jetons (GitHub, Claude) et le forum |
+| Administrateur | tout, dont les comptes, le jeton GitHub, le jeton Claude commun et le forum |
 | Membre | lancer, suivre et publier des intégrations, écrire à Claude |
 | Lecteur | consulter seulement |
 
@@ -198,21 +199,29 @@ Pendant un lancement, si un droit manque, l'étape concernée dit lequel et à q
 
 ---
 
-## Jeton Claude (abonnement Pro ou Max)
+## Jeton Claude (abonnement Pro, Max, Team ou Enterprise)
 
-Claude peut écrire le code de l'intégration directement dans le dépôt, via GitHub Actions. L'appli utilise **uniquement votre abonnement Claude** (Pro ou Max), jamais une clé d'API payante.
+Claude peut écrire le code de l'intégration directement dans le dépôt, via GitHub Actions. L'appli utilise **uniquement un abonnement Claude** (Pro, Max, Team ou Enterprise), jamais une clé d'API payante.
 
-1. Sur votre ordinateur, installez Claude Code : <https://docs.claude.com/fr/docs/claude-code>.
+1. Sur votre ordinateur, installez Claude Code : <https://code.claude.com/docs>.
 2. Lancez :
 
    ```bash
    claude setup-token
    ```
 
-3. Connectez-vous avec votre compte Claude. La commande affiche un jeton longue durée.
-4. Dans l'appli, page **Réglages → Jeton Claude**, collez ce jeton. Il est gardé dans `/data` et n'est **jamais réaffiché**.
+3. Connectez-vous avec votre compte Claude habituel. La commande affiche un jeton valable **1 an**.
+4. Dans l'appli, page **Mon compte → Claude → Jeton Claude personnel**, collez ce jeton. Il est gardé dans `/data` et n'est **jamais réaffiché**.
 
-À chaque lancement, l'appli enregistre ce jeton comme secret `CLAUDE_CODE_OAUTH_TOKEN` dans le nouveau dépôt (chiffré avec la clé publique du dépôt). Sans jeton, les étapes liées à Claude sont simplement sautées.
+Chaque personne met son propre jeton : ses lancements utilisent **son** abonnement (sur l'offre Team, son siège). Un administrateur peut aussi régler un **jeton commun** (page **Réglages**), utilisé pour les personnes sans jeton personnel : il consomme l'abonnement de celui qui l'a créé.
+
+À chaque lancement, l'appli enregistre le jeton de la personne qui lance comme secret `CLAUDE_CODE_OAUTH_TOKEN` dans le nouveau dépôt (chiffré avec la clé publique du dépôt). Le workflow `claude.yml` (`anthropics/claude-code-action@v1`) l'utilise. Sans jeton, les étapes liées à Claude sont simplement sautées. Changer de jeton ne modifie pas les dépôts déjà lancés.
+
+Bon à savoir :
+
+- l'usage de Claude dans GitHub Actions compte sur l'abonnement, comme votre usage normal ;
+- les conditions d'Anthropic prévoient ce jeton pour un usage ordinaire de Claude Code par son titulaire : chacun son jeton, pour ses propres dépôts ;
+- au bout d'un an, refaites `claude setup-token` et collez le nouveau jeton.
 
 Pour ménager les limites de l'abonnement, chaque exécution de Claude est limitée à 40 tours (réglable dans `config/repo-settings.json`, clé `claude.max_turns`).
 
@@ -351,7 +360,7 @@ Si le jeton GitHub est dans `.env`, sauvegardez aussi ce fichier, en lieu sûr.
 4. **Suivi, onglet Développement** : voir [Suivre le développement en direct](#suivre-le-développement-en-direct).
    Le bouton **Publier**, sous les étapes du lancement : voir [Publier dans le store](#publier-dans-le-store).
 5. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
-6. **Réglages** : jeton GitHub, compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées. Modifiables par les administrateurs.
+6. **Réglages** : jeton GitHub, compte GitHub cible, topics en plus, jeton Claude commun, compte du forum. Les clés ne sont jamais réaffichées. Modifiables par les administrateurs.
 7. **Mon compte** et **Utilisateurs** : voir [Comptes](#comptes-double-authentification-et-passkeys).
 
 ## Mode simulation

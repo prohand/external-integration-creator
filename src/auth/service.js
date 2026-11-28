@@ -165,6 +165,7 @@ export class AuthService {
     if (this.disabled) return;
     for (const user of this.users()) {
       if (user.totp?.secret) registerSecret(user.totp.secret);
+      if (user.claudeToken) registerSecret(user.claudeToken);
     }
     if (this.users().length) {
       if (this.config.appPassword) {
@@ -566,6 +567,7 @@ export class AuthService {
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,
       sessions: this.sessionsOf(user.id).length,
+      claudeTokenSet: Boolean(user.claudeToken),
     };
   }
 }

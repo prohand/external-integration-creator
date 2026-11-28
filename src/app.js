@@ -85,6 +85,10 @@ export function createApp({ config, db, hub = new Hub() }) {
   const router = new Router();
   // The token set on the web page (Réglages) wins over GITHUB_TOKEN in .env.
   const githubToken = () => db.state.secrets?.githubToken || config.githubToken || '';
+  // Claude: the personal token of the person (Mon compte), else the shared one (Réglages).
+  const claudeSource = (userId) =>
+    auth.findUser(userId)?.claudeToken ? 'personal' : db.state.secrets?.claudeToken ? 'shared' : null;
+  const claudeTokenFor = (userId) => auth.findUser(userId)?.claudeToken || db.state.secrets?.claudeToken || '';
   const github = new GitHub({ apiUrl: config.githubApiUrl, token: githubToken, timeoutMs: config.httpTimeoutMs });
   // Live follow-up: conditional GETs (304 answers are free in the rate limit).
   const devGithub = new GitHub({
@@ -164,7 +168,8 @@ export function createApp({ config, db, hub = new Hub() }) {
         }),
         config,
         settings: { ...state.settings },
-        secrets: { ...state.secrets },
+        // The Claude token of whoever launched it (older launches: the shared one).
+        secrets: { ...state.secrets, claudeToken: claudeTokenFor(integ.launchedBy?.id) },
         repoSettings: loadRepoSettings(),
         deps: checkDeps,
         template: config.template,
@@ -213,7 +218,7 @@ export function createApp({ config, db, hub = new Hub() }) {
 
   // --- routes -------------------------------------------------------------------
 
-  router.get('/api/status', async () => {
+  router.get('/api/status', async ({ auth: who }) => {
     const state = db.read();
     return {
       version: APP_VERSION,
@@ -221,7 +226,8 @@ export function createApp({ config, db, hub = new Hub() }) {
       realLaunch: REAL_LAUNCH_READY,
       githubTokenSet: Boolean(githubToken()),
       owner: await resolveOwner(),
-      claudeTokenSet: Boolean(state.secrets.claudeToken),
+      claudeTokenSet: Boolean(claudeTokenFor(who.user.id)),
+      claudeTokenSource: claudeSource(who.user.id),
       forumReady: Boolean(state.secrets.forumUserApiKey),
       cacheMinutes: config.cacheTtlMs / 60_000,
       categories: STORE_CATEGORIES,
@@ -414,16 +420,16 @@ export function createApp({ config, db, hub = new Hub() }) {
   );
 
   // One click: everything filled from the tracker idea.
-  router.post('/api/launches/quick', async ({ body }) => {
+  router.post('/api/launches/quick', async ({ body, auth: who }) => {
     const idea = await findIdea(String(body?.ideaKey ?? ''));
     if (!idea) throw new ApiError(404, 'Idée introuvable dans le tracker.');
     if (idea.bucket !== 'free') throw new ApiError(409, `« ${idea.name} » n’est plus libre (${idea.status}).`);
-    return startLaunch(validateLaunch({ ...autofillFromIdea(idea), simulate: body?.simulate === true }));
+    return startLaunch(validateLaunch({ ...autofillFromIdea(idea), simulate: body?.simulate === true }), who);
   });
 
-  router.post('/api/launches', ({ body }) => startLaunch(validateLaunch(body ?? {})));
+  router.post('/api/launches', ({ body, auth: who }) => startLaunch(validateLaunch(body ?? {}), who));
 
-  async function startLaunch(request) {
+  async function startLaunch(request, who) {
     const simulate = config.dryRun || request.simulate;
     if (!simulate && !REAL_LAUNCH_READY) {
       throw new ApiError(501, 'Le lancement réel arrive à la phase 3 : cochez « Simulation » pour l’instant.');
@@ -443,7 +449,9 @@ export function createApp({ config, db, hub = new Hub() }) {
       ...request,
       simulate,
       owner,
-      claude: request.actions.claude && Boolean(state.secrets.claudeToken),
+      claude: request.actions.claude && Boolean(claudeTokenFor(who.user.id)),
+      launchedBy: { id: who.user.id, username: who.user.username },
+      claudeTokenSource: request.actions.claude ? claudeSource(who.user.id) : null,
       maxTurns: state.settings.claudeMaxTurns ?? repoSettings.claude?.max_turns ?? 40,
     });
     runner.start(integ.id);
@@ -536,7 +544,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     return { ok: true };
   });
 
-  registerAuthRoutes(router, { auth, config });
+  registerAuthRoutes(router, { auth, config, hasSharedClaudeToken: () => Boolean(db.state.secrets?.claudeToken) });
 
   // --- HTTP -----------------------------------------------------------------------
 

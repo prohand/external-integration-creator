@@ -122,7 +122,7 @@ async function quickLaunch(item, button) {
   const message = simulated
     ? `Simuler le lancement de « ${item.name} » ? Rien ne sera créé.`
     : `Lancer « ${item.name} » ?\n\nLe dépôt public ${repo} va être créé sur GitHub, avec son issue de suivi` +
-      `${s.claudeTokenSet ? ', et Claude se met au travail' : ''}.\n\nTout est rempli depuis le tracker ; Claude rédige ensuite les descriptions.`;
+      `${s.claudeTokenSet ? `, et Claude se met au travail (${s.claudeTokenSource === 'personal' ? 'votre abonnement Claude' : 'jeton Claude commun'})` : ''}.\n\nTout est rempli depuis le tracker ; Claude rédige ensuite les descriptions.`;
   if (!confirm(message)) return;
   button.disabled = true;
   try {
@@ -565,7 +565,7 @@ async function showLaunch(key) {
     { class: 'options' },
     s.options.map((o) => {
       const disabledReason =
-        o.key === 'claude' && !s.claudeTokenSet ? 'aucun jeton Claude (Réglages)' : null;
+        o.key === 'claude' && !s.claudeTokenSet ? 'aucun jeton Claude (Mon compte)' : null;
       return h(
         'label',
         { class: 'check-line' },
@@ -1318,7 +1318,11 @@ async function showMine() {
         'div',
         { class: 'mine-main' },
         h('a', { href: `#/suivi/${integ.id}`, class: 'mine-name' }, integ.displayName),
-        h('span', { class: 'muted small' }, `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}`),
+        h(
+          'span',
+          { class: 'muted small' },
+          `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}${integ.launchedBy ? ` · par ${integ.launchedBy.username}` : ''}`,
+        ),
       ),
       statusBadge(integ.status, OVERALL_LABELS),
       integ.release ? h('span', { class: 'badge st-done' }, `Publiée v${integ.release.version}`) : null,
@@ -1614,8 +1618,15 @@ async function showSettings() {
       h(
         'fieldset',
         {},
-        h('legend', {}, 'Claude (abonnement Pro ou Max)'),
-        secretField('Jeton Claude', 'claudeToken', settings.claudeTokenSet, 'Créé avec « claude setup-token ». Jamais réaffiché.', values),
+        h('legend', {}, 'Claude (abonnement Pro, Max, Team ou Enterprise)'),
+        h('p', { class: 'muted small' }, 'Chacun met de préférence son propre jeton dans « Mon compte » : ses lancements utilisent alors son abonnement.'),
+        secretField(
+          'Jeton Claude commun',
+          'claudeToken',
+          settings.claudeTokenSet,
+          'Facultatif. Utilisé pour les personnes sans jeton personnel : il consomme l’abonnement de celui qui l’a créé (« claude setup-token »). Jamais réaffiché.',
+          values,
+        ),
         field(
           'Nombre de tours maximum par exécution',
           h('input', {

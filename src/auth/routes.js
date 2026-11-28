@@ -23,7 +23,7 @@ const ISSUER = 'Gladys Integration Creator';
 const FRESH_MS = 10 * 60_000; // "recent login": no password asked again
 const IP_HOST = /^(\d{1,3}(\.\d{1,3}){3}|\[.*\])$/;
 
-export function registerAuthRoutes(router, { auth, config }) {
+export function registerAuthRoutes(router, { auth, config, hasSharedClaudeToken = () => false }) {
   const PUBLIC = { public: true };
   const SELF = { role: 'viewer', restricted: true };
   const ADMIN = { role: 'admin' };
@@ -227,6 +227,7 @@ export function registerAuthRoutes(router, { auth, config }) {
         ...auth.publicUser(user),
         access: a.access,
         requireMfa: auth.security().requireMfa,
+        sharedClaudeToken: hasSharedClaudeToken(),
         totpSince: user.totp?.enabledAt ?? null,
         recoveryCreatedAt: user.recoveryCreatedAt ?? null,
         passkeyList: (user.passkeys ?? []).map((p) => ({
@@ -421,6 +422,34 @@ export function registerAuthRoutes(router, { auth, config }) {
       return { recoveryCodes: codes };
     },
     SELF,
+  );
+
+  // Personal Claude token (claude setup-token): the launches of this person
+  // use their own subscription seat (Pro, Max, Team, Enterprise).
+  router.put(
+    '/api/account/claude-token',
+    async ({ auth: a, body, client }) => {
+      notDisabled();
+      const value = body?.token;
+      let token = null;
+      if (value !== null && value !== '') {
+        token = String(value ?? '').trim();
+        if (token.length < 20 || token.length > 500 || /\s/.test(token)) {
+          throw new ApiError(400, 'Jeton Claude invalide : copiez la ligne entière affichée par « claude setup-token ».');
+        }
+      }
+      await auth.updateUser(a.user.id, (u) => {
+        if (token) u.claudeToken = token;
+        else delete u.claudeToken;
+      });
+      if (token) registerSecret(token);
+      auth.audit(token ? 'Jeton Claude personnel enregistré' : 'Jeton Claude personnel effacé', {
+        actor: a.user.username,
+        ip: client.ip,
+      });
+      return { claudeTokenSet: Boolean(token), sharedClaudeToken: hasSharedClaudeToken() };
+    },
+    { role: 'member' },
   );
 
   router.post(

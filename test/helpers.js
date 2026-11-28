@@ -27,7 +27,7 @@ export async function startApp(env = {}) {
       app.server.closeAllConnections();
       await new Promise((resolve) => app.server.close(resolve));
       await db.update(() => {}); // pending writes (journal) first
-      await rm(dataDir, { recursive: true, force: true });
+      await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     },
   };
 }

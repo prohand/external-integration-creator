@@ -627,6 +627,52 @@ function describeUa(ua) {
   return [browser, os].filter(Boolean).join(' sur ') || (ua ? ua.slice(0, 40) : 'Inconnu');
 }
 
+/** Personal Claude token: launches by this person use their own subscription. */
+function claudeSection(account, refresh) {
+  const message = h('div');
+  const input = h('input', {
+    type: 'password',
+    autocomplete: 'off',
+    spellcheck: 'false',
+    placeholder: account.claudeTokenSet ? 'Réglé : collez-en un autre pour le remplacer' : 'Collez le jeton de « claude setup-token »',
+  });
+  const save = async (token) => {
+    message.replaceChildren();
+    try {
+      await api('account/claude-token', { method: 'PUT', body: { token } });
+      refresh();
+    } catch (err) {
+      message.replaceChildren(errorBox(err.message));
+    }
+  };
+  const status = account.claudeTokenSet
+    ? h('div', { class: 'alert alert-ok' }, 'Vos lancements utilisent votre propre abonnement Claude.')
+    : account.sharedClaudeToken
+      ? h('div', { class: 'alert alert-warn' }, 'Aucun jeton personnel : vos lancements utilisent le jeton commun (Réglages), donc l’abonnement de la personne qui l’a créé.')
+      : h('div', { class: 'alert alert-warn' }, 'Aucun jeton : Claude ne travaillera pas sur vos lancements.');
+  return h(
+    'div',
+    { class: 'mfa-method' },
+    h('div', { class: 'mfa-head' },
+      h('h3', {}, 'Jeton Claude personnel'),
+      h('span', { class: `badge ${account.claudeTokenSet ? 'st-done' : ''}` }, account.claudeTokenSet ? 'réglé' : 'non réglé'),
+    ),
+    h('p', { class: 'muted small' },
+      'Abonnement Pro, Max, Team ou Enterprise : pas de clé API, pas de facturation à l’usage. Sur votre ordinateur, lancez ',
+      h('code', {}, 'claude setup-token'),
+      ', connectez-vous avec votre compte Claude, puis collez ici le jeton affiché (valable 1 an). Il est enregistré dans chaque dépôt que vous lancez (secret CLAUDE_CODE_OAUTH_TOKEN) et n’est jamais réaffiché.'),
+    status,
+    h('div', { class: 'row' },
+      input,
+      h('button', { class: 'button button-primary small', type: 'button', onclick: () => input.value.trim() && save(input.value.trim()) }, 'Enregistrer'),
+      account.claudeTokenSet
+        ? h('button', { class: 'button small', type: 'button', onclick: () => confirm('Effacer votre jeton Claude ? Les dépôts déjà lancés gardent le leur.') && save(null) }, 'Effacer')
+        : null,
+    ),
+    message,
+  );
+}
+
 function sessionsSection(account, refresh) {
   const message = h('div');
   const act = async (path) => {
@@ -684,6 +730,7 @@ export async function showAccount() {
     h('section', { class: 'panel' }, h('h2', {}, 'Double authentification'),
       !account.mfa ? h('div', { class: 'alert alert-warn' }, 'Aucune double authentification : votre compte n’est protégé que par le mot de passe.') : null,
       mfaSection(account, { onChange: refresh })),
+    account.role === 'viewer' ? null : h('section', { class: 'panel' }, h('h2', {}, 'Claude'), claudeSection(account, refresh)),
     h('section', { class: 'panel' }, h('h2', {}, 'Mot de passe'), passwordForm()),
     h('section', { class: 'panel' }, h('h2', {}, 'Sessions ouvertes'), sessionsSection(account, refresh)),
   );
