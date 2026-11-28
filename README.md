@@ -39,7 +39,7 @@ mkdir external-integration-creator && cd external-integration-creator
 # les deux seuls fichiers nécessaires
 curl -fsSLO https://raw.githubusercontent.com/prohand/external-integration-creator/main/docker-compose.yml
 curl -fsSL -o .env https://raw.githubusercontent.com/prohand/external-integration-creator/main/.env.example
-nano .env                       # au minimum : GITHUB_TOKEN
+nano .env                       # au minimum : GITHUB_TOKEN, et APP_PASSWORD ou NO_PASSWORD=true
 
 mkdir -p data
 sudo chown 1000:1000 data       # l'appli tourne avec l'utilisateur "node" (uid 1000), pas root
@@ -47,7 +47,9 @@ sudo chown 1000:1000 data       # l'appli tourne avec l'utilisateur "node" (uid 
 docker compose up -d
 ```
 
-Ouvrez ensuite `http://<ip-du-serveur>:3000`.
+Ouvrez ensuite `http://localhost:3000` sur le serveur. Pour y accéder depuis un autre poste, passez par un reverse proxy, ou réglez `BIND_ADDRESS=0.0.0.0` avec un mot de passe (voir [Derrière un reverse proxy](#derrière-un-reverse-proxy-exemple-pangolin)).
+
+L'appli agit avec votre jeton GitHub : elle **refuse de démarrer sans protection**. Réglez `APP_PASSWORD` (12 caractères minimum), ou `NO_PASSWORD=true` si un reverse proxy avec authentification la protège déjà.
 
 Quelques chiffres :
 
@@ -62,7 +64,11 @@ Les réglages se trouvent dans `.env` (chaque ligne est commentée dans `.env.ex
 | `PORT` | port d'écoute dans le conteneur | `3000` |
 | `HOST_PORT` | port publié sur l'hôte | `3000` |
 | `BASE_PATH` | sous-chemin derrière un proxy, par ex. `/gladys-creator` | vide |
-| `APP_PASSWORD` | mot de passe (Basic Auth) si vous n'avez pas de proxy avec authentification | vide = pas de mot de passe |
+| `APP_PASSWORD` | mot de passe (Basic Auth), 12 caractères minimum | **obligatoire**, sauf `NO_PASSWORD=true` |
+| `NO_PASSWORD` | `true` seulement derrière un reverse proxy qui authentifie (Pangolin, Authelia…) | `false` |
+| `BIND_ADDRESS` | adresse où docker compose publie le port : `127.0.0.1` = cette machine seulement | `127.0.0.1` |
+| `ALLOWED_HOSTS` | noms de domaine acceptés (ex. `creator.mondomaine.fr`) ; les adresses IP et `localhost` marchent toujours | vide |
+| `TRUST_PROXY` | `true` seulement derrière un reverse proxy | `false` |
 | `GITHUB_TOKEN` | jeton GitHub fine-grained | — |
 | `DRY_RUN` | mode simulation : rien n'est créé | `false` |
 | `CACHE_TTL_MINUTES` | durée du cache des sources | `15` |
@@ -215,7 +221,11 @@ L'appli écoute sur un seul port (`PORT`, 3000 par défaut). Elle gère :
 
 1. Dans Pangolin, créez une **ressource HTTP** (par exemple `creator.mondomaine.fr`).
 2. Cible : `http://<ip-du-serveur>:3000` (ou `http://external-integration-creator:3000` si Pangolin/Newt est sur le même réseau Docker).
-3. Laissez l'**authentification Pangolin** activée : seul vous accédez à l'appli. `APP_PASSWORD` peut alors rester vide.
+3. Laissez l'**authentification Pangolin** activée. Dans `.env` :
+   - `NO_PASSWORD=true` (Pangolin authentifie déjà) ;
+   - `ALLOWED_HOSTS=creator.mondomaine.fr` (sinon l'appli refuse ce nom de domaine) ;
+   - `TRUST_PROXY=true` ;
+   - gardez `BIND_ADDRESS=127.0.0.1` : le port n'est alors joignable que depuis le serveur lui-même (et le réseau Docker), jamais en direct depuis le réseau, ce qui contournerait l'authentification de Pangolin.
 4. Pour servir l'appli dans un sous-chemin plutôt qu'un sous-domaine, réglez `BASE_PATH=/gladys-creator` et utilisez ce même chemin dans Pangolin.
 
 ### Nginx (pour info)
@@ -233,7 +243,12 @@ location /gladys-creator/ {
 
 ### Sans reverse proxy
 
-Réglez `APP_PASSWORD` (et éventuellement `APP_USER`). Le navigateur demande alors un identifiant et un mot de passe. Après 10 essais ratés depuis une même adresse, l'accès est bloqué 15 minutes.
+Réglez `APP_PASSWORD` (12 caractères minimum, et éventuellement `APP_USER`) et `BIND_ADDRESS=0.0.0.0` pour ouvrir le port au réseau. Laissez `TRUST_PROXY=false`. Le navigateur demande un identifiant et un mot de passe. Contre les essais en rafale :
+
+- après 10 essais ratés depuis une même adresse, cette adresse est bloquée 15 minutes ;
+- après 100 essais ratés au total, toutes les adresses sont ralenties jusqu'à la fin des 15 minutes (redémarrer le conteneur lève le blocage).
+
+Pour l'ouvrir via un nom de domaine, ajoutez-le à `ALLOWED_HOSTS`.
 
 ---
 

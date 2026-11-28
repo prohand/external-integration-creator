@@ -12,7 +12,7 @@ setLogLevel('error');
 
 export async function startApp(env = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'ic-test-'));
-  const config = loadConfig({ DATA_DIR: dataDir, PORT: '0', HOST: '127.0.0.1', ...env });
+  const config = loadConfig({ DATA_DIR: dataDir, PORT: '0', HOST: '127.0.0.1', NO_PASSWORD: 'true', ...env });
   const db = await new Db(dataDir).load();
   const app = createApp({ config, db });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));

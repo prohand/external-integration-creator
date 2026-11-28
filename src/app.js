@@ -38,6 +38,8 @@ import {
   Router,
   clientInfo,
   createBasicAuth,
+  hostName,
+  isHostAllowed,
   readJsonBody,
   send,
   serveStatic,
@@ -526,6 +528,15 @@ export function createApp({ config, db, hub = new Hub() }) {
 
     // Health check: always answered, without auth or base path (Docker).
     if (path === '/healthz') return send(req, res, 200, { ok: true });
+
+    // DNS rebinding guard: a page of another site that resolves to this
+    // server must not be able to call the API as same-origin.
+    if (!isHostAllowed(req.headers.host, config.allowedHosts)) {
+      log.warn('Nom d’hôte refusé', { host: String(req.headers.host ?? '').slice(0, 100), ip: client.ip });
+      return send(req, res, 421, {
+        error: `Nom d’hôte « ${hostName(req.headers.host)} » non autorisé : ajoutez-le à ALLOWED_HOSTS dans .env.`,
+      });
+    }
 
     if (config.basePath) {
       if (path === config.basePath) {
