@@ -33,11 +33,12 @@ import { buildBoard, fetchTracker } from './sources/tracker.js';
 import { loadRepoSettings, publicSettings, saveSettings } from './settings.js';
 import { Hub } from './sse.js';
 import { DevMonitor, devChannel } from './live/monitor.js';
+import { AuthService, roleRank } from './auth/service.js';
+import { registerAuthRoutes } from './auth/routes.js';
 import {
   ApiError,
   Router,
   clientInfo,
-  createBasicAuth,
   hostName,
   isHostAllowed,
   readJsonBody,
@@ -80,13 +81,15 @@ function card(item) {
 export function createApp({ config, db, hub = new Hub() }) {
   const cache = new Cache(config.cacheTtlMs);
   const shortCache = new Cache(60_000);
-  const checkAuth = createBasicAuth({ user: config.appUser, password: config.appPassword });
+  const auth = new AuthService({ config, db });
   const router = new Router();
-  const github = new GitHub({ apiUrl: config.githubApiUrl, token: config.githubToken, timeoutMs: config.httpTimeoutMs });
+  // The token set on the web page (Réglages) wins over GITHUB_TOKEN in .env.
+  const githubToken = () => db.state.secrets?.githubToken || config.githubToken || '';
+  const github = new GitHub({ apiUrl: config.githubApiUrl, token: githubToken, timeoutMs: config.httpTimeoutMs });
   // Live follow-up: conditional GETs (304 answers are free in the rate limit).
   const devGithub = new GitHub({
     apiUrl: config.githubApiUrl,
-    token: config.githubToken,
+    token: githubToken,
     timeoutMs: config.httpTimeoutMs,
     etags: true,
   });
@@ -130,7 +133,7 @@ export function createApp({ config, db, hub = new Hub() }) {
   async function resolveOwner() {
     const configured = db.read().settings.owner;
     if (configured) return configured;
-    if (!config.githubToken) return null;
+    if (!githubToken()) return null;
     try {
       const { value } = await shortCache.get('github:user', () => github.get('/user'));
       return value.login;
@@ -154,7 +157,7 @@ export function createApp({ config, db, hub = new Hub() }) {
         dryRun: Boolean(integ.simulate),
         gh: new GitHub({
           apiUrl: config.githubApiUrl,
-          token: config.githubToken,
+          token: githubToken,
           timeoutMs: config.httpTimeoutMs,
           dryRun: Boolean(integ.simulate),
           onSimulated: ({ method, path }) => addLine(`Simulation : ${method} ${path}`),
@@ -216,7 +219,7 @@ export function createApp({ config, db, hub = new Hub() }) {
       version: APP_VERSION,
       dryRun: config.dryRun,
       realLaunch: REAL_LAUNCH_READY,
-      githubTokenSet: Boolean(config.githubToken),
+      githubTokenSet: Boolean(githubToken()),
       owner: await resolveOwner(),
       claudeTokenSet: Boolean(state.secrets.claudeToken),
       forumReady: Boolean(state.secrets.forumUserApiKey),
@@ -232,27 +235,41 @@ export function createApp({ config, db, hub = new Hub() }) {
   // Forces a new download; the previous data stays available if it fails.
   router.post('/api/refresh', () => dashboard({ force: true }));
 
-  router.get('/api/settings', () => publicSettings(db.read()));
+  router.get('/api/settings', () => publicSettings(db.read(), config));
 
   // Probes the token rights without changing anything (see github-check.js).
   router.post('/api/github/check', async () => {
     shortCache.clear('github:user');
     return checkToken(github, { owner: db.read().settings.owner || null });
   });
-  router.put('/api/settings', async ({ body }) => {
-    const result = await saveSettings(db, body ?? {});
-    shortCache.clear('github:user');
-    return result;
-  });
+  router.put(
+    '/api/settings',
+    async ({ body, auth: a, client }) => {
+      const result = await saveSettings(db, body ?? {}, config);
+      shortCache.clear('github:user');
+      devGithub.etags?.clear();
+      for (const name of ['githubToken', 'claudeToken']) {
+        if (body?.[name] !== undefined) {
+          auth.audit(`${name === 'githubToken' ? 'Jeton GitHub' : 'Jeton Claude'} ${body[name] ? 'modifié' : 'effacé'}`, {
+            actor: a.user.username,
+            ip: client.ip,
+          });
+        }
+      }
+      return result;
+    },
+    { role: 'admin' },
+  );
 
   // --- forum account (Discourse User API Key, copy/paste: no callback URL) ---
+  const ADMIN = { role: 'admin' };
   router.post('/api/forum/connect', async () => {
     const { pending, url } = startUserApiKey(config);
     await db.update((s) => {
       s.secrets.forumPending = pending;
     });
     return { url };
-  });
+  }, ADMIN);
 
   router.post('/api/forum/complete', async ({ body }) => {
     const pending = db.read().secrets.forumPending;
@@ -271,8 +288,8 @@ export function createApp({ config, db, hub = new Hub() }) {
       delete s.secrets.forumPending;
       s.settings.forumUsername = username ?? '';
     });
-    return publicSettings(db.read());
-  });
+    return publicSettings(db.read(), config);
+  }, ADMIN);
 
   router.post('/api/forum/disconnect', async () => {
     const { secrets } = db.read();
@@ -287,8 +304,8 @@ export function createApp({ config, db, hub = new Hub() }) {
       delete s.secrets.forumPending;
       s.settings.forumUsername = '';
     });
-    return publicSettings(db.read());
-  });
+    return publicSettings(db.read(), config);
+  }, ADMIN);
 
   // --- batched announcements in the community topic ---
   // "reserve": "Je prends :" after a launch; "release": "sorties" after a publication.
@@ -411,7 +428,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     if (!simulate && !REAL_LAUNCH_READY) {
       throw new ApiError(501, 'Le lancement réel arrive à la phase 3 : cochez « Simulation » pour l’instant.');
     }
-    if (!simulate && !config.githubToken) throw new ApiError(400, 'Aucun jeton GitHub réglé (GITHUB_TOKEN).');
+    if (!simulate && !githubToken()) throw new ApiError(400, 'Aucun jeton GitHub réglé (page Réglages ou GITHUB_TOKEN).');
     const owner = (await resolveOwner()) ?? (simulate ? 'votre-compte' : null);
     if (!owner) throw new ApiError(400, 'Réglez le compte ou l’organisation GitHub cible (page Réglages).');
 
@@ -453,7 +470,7 @@ export function createApp({ config, db, hub = new Hub() }) {
     if (!['done', 'warning'].includes(launch)) {
       throw new ApiError(409, 'Le lancement doit être terminé avant de publier (voir les étapes en erreur).');
     }
-    if (!config.githubToken) throw new ApiError(400, 'Aucun jeton GitHub réglé (GITHUB_TOKEN).');
+    if (!githubToken()) throw new ApiError(400, 'Aucun jeton GitHub réglé (page Réglages ou GITHUB_TOKEN).');
     if (config.dryRun) throw new ApiError(409, 'Mode simulation (DRY_RUN) : la publication est désactivée.');
     await publisher.reset(integ.id, { publishAttempt: { startedAt: new Date().toISOString() } });
     publisher.start(integ.id);
@@ -519,6 +536,8 @@ export function createApp({ config, db, hub = new Hub() }) {
     return { ok: true };
   });
 
+  registerAuthRoutes(router, { auth, config });
+
   // --- HTTP -----------------------------------------------------------------------
 
   async function handle(req, res) {
@@ -547,18 +566,6 @@ export function createApp({ config, db, hub = new Hub() }) {
       path = path.slice(config.basePath.length);
     }
 
-    const auth = checkAuth(req, client.ip);
-    if (!auth.ok) {
-      if (auth.status === 401 && req.headers.authorization) log.warn('Authentification refusée', { ip: client.ip });
-      return send(
-        req,
-        res,
-        auth.status,
-        { error: auth.status === 429 ? 'Trop de tentatives, réessayez plus tard.' : 'Authentification requise.' },
-        auth.status === 401 ? { 'www-authenticate': 'Basic realm="External Integration Creator", charset="UTF-8"' } : {},
-      );
-    }
-
     if (path.startsWith('/api/')) {
       // Requests that change something must come from the app itself
       // (custom header = no cross-site form, no simple CORS request).
@@ -571,9 +578,34 @@ export function createApp({ config, db, hub = new Hub() }) {
       const found = router.match(req.method === 'HEAD' ? 'GET' : req.method, path);
       if (!found) return send(req, res, 404, { error: 'Introuvable' });
       if (found.methodNotAllowed) return send(req, res, 405, { error: 'Méthode non autorisée' });
+
+      // Accounts: who is calling, and may they do this?
+      const who = auth.authenticate(req);
+      if (!found.options.public) {
+        if (!who) return send(req, res, 401, { error: 'Connexion requise.', details: { login: true } });
+        if (who.access !== 'full' && !found.options.restricted) {
+          const why =
+            who.access === 'password'
+              ? 'Changez d’abord votre mot de passe (page Mon compte).'
+              : 'Activez d’abord la double authentification (page Mon compte).';
+          return send(req, res, 403, { error: why, details: { access: who.access } });
+        }
+        const needed = found.options.role ?? (['GET', 'HEAD'].includes(req.method) ? 'viewer' : 'member');
+        if (roleRank(who.user.role) < roleRank(needed)) {
+          return send(req, res, 403, { error: 'Votre rôle ne permet pas cette action.' });
+        }
+      }
       try {
         const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readJsonBody(req) : undefined;
-        const result = await found.handler({ req, res, params: found.params, query: url.searchParams, body, client });
+        const result = await found.handler({
+          req,
+          res,
+          params: found.params,
+          query: url.searchParams,
+          body,
+          client,
+          auth: who,
+        });
         if (result !== undefined && !res.headersSent) send(req, res, 200, result);
       } catch (err) {
         const status = err instanceof ApiError ? err.status : 502;
@@ -604,5 +636,5 @@ export function createApp({ config, db, hub = new Hub() }) {
     hub.closeAll();
   });
 
-  return { server, router, cache, sources, dashboard, runner, publisher, hub, github, monitor };
+  return { server, router, cache, sources, dashboard, runner, publisher, hub, github, monitor, auth };
 }

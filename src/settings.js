@@ -18,7 +18,10 @@ export function loadRepoSettings(file = REPO_SETTINGS_FILE) {
 }
 
 // Secrets set from the settings form (the forum key comes from its own flow).
-export const SECRET_NAMES = ['claudeToken'];
+export const SECRET_NAMES = ['githubToken', 'claudeToken'];
+
+// GitHub tokens: fine-grained (github_pat_…) or classic (ghp_…).
+const GITHUB_TOKEN = /^(github_pat_|ghp_)[A-Za-z0-9_]{20,250}$/;
 
 export const DEFAULT_SETTINGS = {
   owner: '',
@@ -27,7 +30,7 @@ export const DEFAULT_SETTINGS = {
   extraTopics: '',
 };
 
-export function publicSettings(state) {
+export function publicSettings(state, config = {}) {
   const settings = { ...DEFAULT_SETTINGS, ...state.settings };
   const secrets = Object.fromEntries(
     SECRET_NAMES.map((name) => [`${name}Set`, Boolean(state.secrets?.[name])]),
@@ -37,6 +40,8 @@ export function publicSettings(state) {
     ...secrets,
     forumConnected: Boolean(state.secrets?.forumUserApiKey),
     forumPending: Boolean(state.secrets?.forumPending),
+    // Where the GitHub token comes from: the web page wins over .env.
+    githubTokenSource: state.secrets?.githubToken ? 'web' : config.githubToken ? 'env' : null,
   };
 }
 
@@ -83,13 +88,16 @@ export function validateSettingsUpdate(body) {
       if (secret.length < 8 || secret.length > 500 || /\s/.test(secret)) {
         throw new ApiError(400, 'Clé invalide.');
       }
+      if (name === 'githubToken' && !GITHUB_TOKEN.test(secret)) {
+        throw new ApiError(400, 'Jeton GitHub invalide : il commence par github_pat_ (fine-grained) ou ghp_ (classique).');
+      }
       secrets[name] = secret;
     }
   }
   return { settings, secrets };
 }
 
-export async function saveSettings(db, body) {
+export async function saveSettings(db, body, config) {
   const { settings, secrets } = validateSettingsUpdate(body);
   await db.update((state) => {
     state.settings = { ...state.settings, ...settings };
@@ -101,5 +109,5 @@ export async function saveSettings(db, body) {
       }
     }
   });
-  return publicSettings(db.read());
+  return publicSettings(db.read(), config);
 }

@@ -1,9 +1,8 @@
 // -----------------------------------------------------------------------------
 // HTTP plumbing on node:http: tiny router, JSON bodies and responses (gzip),
-// reverse-proxy aware client info, optional Basic Auth, static files.
+// reverse-proxy aware client info, static files.
 // -----------------------------------------------------------------------------
 
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -21,31 +20,35 @@ export class Router {
     this.routes = [];
   }
 
-  /** `path` may contain ":param" segments, e.g. "/api/launches/:id". */
-  add(method, path, handler) {
+  /**
+   * `path` may contain ":param" segments, e.g. "/api/launches/:id".
+   * `options`: { public } (no login needed), { role } (minimum role),
+   * { restricted } (allowed before the password change / 2nd factor setup).
+   */
+  add(method, path, handler, options = {}) {
     const names = [];
     const pattern = path.replace(/:([a-zA-Z]+)/g, (_, name) => {
       names.push(name);
       return '([^/]+)';
     });
-    this.routes.push({ method, regex: new RegExp(`^${pattern}$`), names, handler });
+    this.routes.push({ method, regex: new RegExp(`^${pattern}$`), names, handler, options });
     return this;
   }
 
-  get(path, handler) {
-    return this.add('GET', path, handler);
+  get(path, handler, options) {
+    return this.add('GET', path, handler, options);
   }
 
-  post(path, handler) {
-    return this.add('POST', path, handler);
+  post(path, handler, options) {
+    return this.add('POST', path, handler, options);
   }
 
-  put(path, handler) {
-    return this.add('PUT', path, handler);
+  put(path, handler, options) {
+    return this.add('PUT', path, handler, options);
   }
 
-  delete(path, handler) {
-    return this.add('DELETE', path, handler);
+  delete(path, handler, options) {
+    return this.add('DELETE', path, handler, options);
   }
 
   match(method, path) {
@@ -59,7 +62,7 @@ export class Router {
       route.names.forEach((name, i) => {
         params[name] = decodeURIComponent(m[i + 1]);
       });
-      return { handler: route.handler, params };
+      return { handler: route.handler, params, options: route.options };
     }
     return pathMatched ? { methodNotAllowed: true } : null;
   }
@@ -146,67 +149,6 @@ export async function readJsonBody(req, limit = 1_000_000) {
   } catch {
     throw new ApiError(400, 'JSON invalide.');
   }
-}
-
-const digest = (value) => createHash('sha256').update(String(value)).digest();
-
-export const AUTH_LIMITS = {
-  window: 15 * 60_000, // failures are counted over 15 minutes
-  perAddress: 10, // then that address is blocked until the window ends
-  global: 100, // and every address is slowed down past this many failures
-  maxTracked: 10_000, // addresses remembered at most (oldest dropped first)
-};
-
-/**
- * Basic Auth check. Returns { ok: true } when no password is configured.
- * Failures are limited per address and globally (429), so that changing
- * addresses does not allow unlimited guessing.
- */
-export function createBasicAuth({ user, password, limits = AUTH_LIMITS, now = () => Date.now() }) {
-  const failures = new Map(); // ip -> { count, since }
-  let global = { count: 0, since: now() };
-
-  const forget = (t) => {
-    for (const [ip, entry] of failures) {
-      if (t - entry.since > limits.window) failures.delete(ip);
-    }
-  };
-
-  const check = function check(req, ip) {
-    if (!password) return { ok: true };
-    const t = now();
-    if (t - global.since > limits.window) global = { count: 0, since: t };
-    const entry = failures.get(ip);
-    if (entry && t - entry.since > limits.window) failures.delete(ip);
-    if ((failures.get(ip)?.count ?? 0) >= limits.perAddress) return { ok: false, status: 429 };
-    if (global.count >= limits.global) return { ok: false, status: 429 };
-
-    const match = /^Basic\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
-    if (match) {
-      const decoded = Buffer.from(match[1], 'base64').toString('utf8');
-      const colon = decoded.indexOf(':');
-      const u = decoded.slice(0, colon);
-      const p = decoded.slice(colon + 1);
-      const okUser = timingSafeEqual(digest(u), digest(user));
-      const okPass = timingSafeEqual(digest(p), digest(password));
-      if (colon >= 0 && okUser && okPass) {
-        failures.delete(ip);
-        return { ok: true };
-      }
-      global.count += 1;
-      const current = failures.get(ip) ?? { count: 0, since: t };
-      current.count += 1;
-      failures.delete(ip);
-      failures.set(ip, current);
-      if (failures.size > limits.maxTracked) {
-        forget(t);
-        while (failures.size > limits.maxTracked) failures.delete(failures.keys().next().value);
-      }
-    }
-    return { ok: false, status: 401 };
-  };
-  check.tracked = () => failures.size;
-  return check;
 }
 
 const MIME = {

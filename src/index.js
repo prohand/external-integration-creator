@@ -27,13 +27,14 @@ registerSecret(config.appPassword);
 const db = await new Db(config.dataDir).load();
 for (const value of Object.values(db.read().secrets)) registerSecret(value);
 const app = createApp({ config, db });
+await app.auth.init();
 await app.runner.recover();
 await app.publisher.recover();
 
 app.server.listen(config.port, config.host, () => {
   log.info(
     `External Integration Creator à l'écoute sur ${config.host}:${config.port}${config.basePath || ''}/` +
-      `${config.dryRun ? ' (mode simulation)' : ''}${config.appPassword ? ' (mot de passe actif)' : ''}`,
+      `${config.dryRun ? ' (mode simulation)' : ''}${config.noPassword ? ' (comptes désactivés : NO_PASSWORD=true)' : ' (comptes actifs)'}`,
   );
 });
 

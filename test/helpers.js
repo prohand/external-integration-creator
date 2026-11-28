@@ -15,6 +15,7 @@ export async function startApp(env = {}) {
   const config = loadConfig({ DATA_DIR: dataDir, PORT: '0', HOST: '127.0.0.1', NO_PASSWORD: 'true', ...env });
   const db = await new Db(dataDir).load();
   const app = createApp({ config, db });
+  await app.auth.init();
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   return {
@@ -25,6 +26,7 @@ export async function startApp(env = {}) {
     async close() {
       app.server.closeAllConnections();
       await new Promise((resolve) => app.server.close(resolve));
+      await db.update(() => {}); // pending writes (journal) first
       await rm(dataDir, { recursive: true, force: true });
     },
   };

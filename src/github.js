@@ -57,12 +57,17 @@ export class GitHubError extends Error {
 export class GitHub {
   constructor({ apiUrl, token, dryRun = false, timeoutMs = 20_000, onSimulated, etags = false } = {}) {
     this.apiUrl = apiUrl;
-    this.token = token;
+    // A string, or a function (the token can be changed from the web page).
+    this.tokenSource = token;
     this.dryRun = dryRun;
     this.timeoutMs = timeoutMs;
     this.onSimulated = onSimulated;
     // Conditional GETs: a 304 answer does not count in the GitHub rate limit.
     this.etags = etags ? new Map() : null;
+  }
+
+  get token() {
+    return (typeof this.tokenSource === 'function' ? this.tokenSource() : this.tokenSource) || '';
   }
 
   /**
