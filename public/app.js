@@ -4,6 +4,9 @@
 // textContent (see `h()`), never with innerHTML.
 // -----------------------------------------------------------------------------
 
+import { api, errorBox, extLink, field, formatDate, h, loading, setView } from './ui.js';
+import { authStart, showAccount, showUsers, currentUser, isAdmin } from './auth.js';
+
 const state = {
   status: null,
   dashboard: null,
@@ -14,60 +17,6 @@ const state = {
 
 // --- helpers -----------------------------------------------------------------
 
-/** Builds an element. Strings and numbers become text nodes. */
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(props ?? {})) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === 'class') el.className = value;
-    else if (key === 'dataset') Object.assign(el.dataset, value);
-    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
-    else if (key === 'href') el.setAttribute('href', safeHref(value));
-    else if (value === true) el.setAttribute(key, '');
-    else el.setAttribute(key, String(value));
-  }
-  for (const child of children.flat(Infinity)) {
-    if (child === undefined || child === null || child === false) continue;
-    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
-  }
-  return el;
-}
-
-/** Only http(s) links and in-app hashes are allowed. */
-function safeHref(value) {
-  const s = String(value);
-  if (s.startsWith('#')) return s;
-  try {
-    const url = new URL(s, document.baseURI);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '#';
-  } catch {
-    return '#';
-  }
-}
-
-function extLink(href, label) {
-  return h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, label);
-}
-
-async function api(path, { method = 'GET', body } = {}) {
-  const response = await fetch(`api/${path}`, {
-    method,
-    headers: {
-      accept: 'application/json',
-      ...(method !== 'GET' ? { 'x-requested-with': 'integration-creator' } : {}),
-      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || `Erreur ${response.status}`);
-    error.details = data.details;
-    throw error;
-  }
-  return data;
-}
-
 function normalize(value) {
   return String(value ?? '')
     .normalize('NFD')
@@ -77,19 +26,6 @@ function normalize(value) {
 
 function categoryLabel(key) {
   return state.status?.categories.find((c) => c.key === key)?.label ?? key;
-}
-
-function formatDate(iso) {
-  return new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
-}
-
-function setView(...children) {
-  const view = document.getElementById('view');
-  view.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
-}
-
-function errorBox(message) {
-  return h('div', { class: 'alert alert-error', role: 'alert' }, message);
 }
 
 // --- dashboard -----------------------------------------------------------------
@@ -186,7 +122,7 @@ async function quickLaunch(item, button) {
   const message = simulated
     ? `Simuler le lancement de « ${item.name} » ? Rien ne sera créé.`
     : `Lancer « ${item.name} » ?\n\nLe dépôt public ${repo} va être créé sur GitHub, avec son issue de suivi` +
-      `${s.claudeTokenSet ? ', et Claude se met au travail' : ''}.\n\nTout est rempli depuis le tracker ; Claude rédige ensuite les descriptions.`;
+      `${s.claudeTokenSet ? `, et Claude se met au travail (${s.claudeTokenSource === 'personal' ? 'votre abonnement Claude' : 'jeton Claude commun'})` : ''}.\n\nTout est rempli depuis le tracker ; Claude rédige ensuite les descriptions.`;
   if (!confirm(message)) return;
   button.disabled = true;
   try {
@@ -382,10 +318,6 @@ function statusBadge(status, labels = STEP_LABELS) {
   return h('span', { class: `badge st st-${status}` }, labels[status] ?? status);
 }
 
-function loading(text = 'Chargement…') {
-  return h('p', { class: 'muted' }, text);
-}
-
 function debounce(fn, ms) {
   let timer;
   return (...args) => {
@@ -429,17 +361,6 @@ const LANGS = [
   { key: 'de', label: 'Allemand' },
   { key: 'es', label: 'Espagnol' },
 ];
-
-function field(label, control, { hint, error } = {}) {
-  return h(
-    'label',
-    { class: 'field' },
-    h('span', { class: 'field-label' }, label),
-    control,
-    hint ? h('span', { class: 'muted small' }, hint) : null,
-    error,
-  );
-}
 
 async function showLaunch(key) {
   closeStream();
@@ -644,7 +565,7 @@ async function showLaunch(key) {
     { class: 'options' },
     s.options.map((o) => {
       const disabledReason =
-        o.key === 'claude' && !s.claudeTokenSet ? 'aucun jeton Claude (Réglages)' : null;
+        o.key === 'claude' && !s.claudeTokenSet ? 'aucun jeton Claude (Mon compte)' : null;
       return h(
         'label',
         { class: 'check-line' },
@@ -1397,7 +1318,11 @@ async function showMine() {
         'div',
         { class: 'mine-main' },
         h('a', { href: `#/suivi/${integ.id}`, class: 'mine-name' }, integ.displayName),
-        h('span', { class: 'muted small' }, `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}`),
+        h(
+          'span',
+          { class: 'muted small' },
+          `${integ.owner}/${integ.repoName} · ${formatDate(integ.createdAt)}${integ.launchedBy ? ` · par ${integ.launchedBy.username}` : ''}`,
+        ),
       ),
       statusBadge(integ.status, OVERALL_LABELS),
       integ.release ? h('span', { class: 'badge st-done' }, `Publiée v${integ.release.version}`) : null,
@@ -1540,7 +1465,7 @@ function secretField(label, name, isSet, hint, values) {
   const input = h('input', {
     type: 'password',
     autocomplete: 'off',
-    placeholder: isSet ? 'Réglée : laissez vide pour la garder' : 'Non réglée',
+    placeholder: isSet ? 'Réglé : laissez vide pour le garder' : 'Non réglé',
     oninput: (e) => {
       values[name] = e.target.value;
     },
@@ -1554,12 +1479,56 @@ function secretField(label, name, isSet, hint, values) {
       onclick: () => {
         values[name] = null;
         input.value = '';
-        input.placeholder = 'Sera effacée à l’enregistrement';
+        input.placeholder = 'Sera effacé à l’enregistrement';
       },
     },
     'Effacer',
   );
-  return field(h('span', {}, `${label} `, h('span', { class: `badge ${isSet ? 'st-done' : ''}` }, isSet ? 'réglée' : 'non réglée')), h('span', { class: 'row' }, input, clear), { hint });
+  return field(h('span', {}, `${label} `, h('span', { class: `badge ${isSet ? 'st-done' : ''}` }, isSet ? 'réglé' : 'non réglé')), h('span', { class: 'row' }, input, clear), { hint });
+}
+
+/** "Tester le jeton GitHub": each right probed without changing anything. */
+function tokenCheckBox() {
+  const result = h('div');
+  const run = async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    result.replaceChildren(loading('Test du jeton…'));
+    try {
+      const r = await api('github/check', { method: 'POST' });
+      result.replaceChildren(
+        r.login
+          ? h(
+              'p',
+              { class: 'small' },
+              `Compte du jeton : ${r.login} · type : ${r.tokenType}`,
+              r.expiresAt ? ` · expire le ${formatDate(r.expiresAt)}` : ' · sans date d’expiration',
+            )
+          : '',
+        h('div', { class: `alert ${r.ok ? 'alert-ok' : 'alert-warn'}` }, r.message),
+        r.permissions?.length
+          ? renderChecks(
+              r.permissions.map((p) => ({
+                ok: p.status === 'ok' ? true : p.status === 'missing' ? false : null,
+                label: `${p.label}${p.level ? ` (${p.level === 'write' ? 'lecture et écriture' : 'lecture'})` : ''}`,
+                message: p.note ?? `sert à ${p.use}`,
+              })),
+            )
+          : '',
+      );
+    } catch (err) {
+      result.replaceChildren(errorBox(err.message));
+    }
+    button.disabled = false;
+  };
+  return h(
+    'section',
+    { class: 'panel panel-narrow' },
+    h('h2', {}, 'Tester le jeton GitHub'),
+    h('p', { class: 'muted small' }, 'Chaque droit est essayé sur un de vos dépôts avec une requête invalide : rien n’est modifié.'),
+    h('button', { class: 'button', type: 'button', onclick: run }, 'Tester le jeton GitHub'),
+    result,
+  );
 }
 
 async function showSettings() {
@@ -1573,6 +1542,7 @@ async function showSettings() {
     return;
   }
   const s = state.status;
+  const admin = isAdmin();
   const values = {};
   const text = (name, props = {}) =>
     h('input', {
@@ -1591,6 +1561,7 @@ async function showSettings() {
     try {
       await api('settings', { method: 'PUT', body: values });
       state.status = await api('status');
+      state.dashboard = null;
       showSettings();
     } catch (err) {
       message.replaceChildren(errorBox(err.message));
@@ -1604,21 +1575,39 @@ async function showSettings() {
       { class: 'facts' },
       h('dt', {}, 'Version'),
       h('dd', {}, s.version),
-      h('dt', {}, 'Jeton GitHub (.env)'),
-      h('dd', {}, s.githubTokenSet ? 'Réglé' : 'Non réglé : ajoutez GITHUB_TOKEN dans .env'),
+      h('dt', {}, 'Jeton GitHub'),
+      h(
+        'dd',
+        {},
+        settings.githubTokenSource === 'web'
+          ? 'Réglé sur cette page'
+          : settings.githubTokenSource === 'env'
+            ? 'Réglé dans .env (GITHUB_TOKEN)'
+            : 'Non réglé',
+      ),
       h('dt', {}, 'Mode simulation (DRY_RUN)'),
       h('dd', {}, s.dryRun ? 'Oui' : 'Non'),
       h('dt', {}, 'Cache des sources'),
       h('dd', {}, `${s.cacheMinutes} min`),
     ),
     tokenCheckBox(),
+    admin ? null : h('div', { class: 'alert alert-info' }, 'Lecture seule : seuls les administrateurs modifient les réglages et les jetons.'),
     h(
       'form',
-      { class: 'launch-form', onsubmit: onSubmit },
+      { class: 'launch-form', onsubmit: onSubmit, inert: !admin },
       h(
         'fieldset',
         {},
         h('legend', {}, 'GitHub'),
+        secretField(
+          'Jeton GitHub (fine-grained)',
+          'githubToken',
+          settings.githubTokenSource === 'web',
+          settings.githubTokenSource === 'env'
+            ? 'Un jeton est réglé dans .env (GITHUB_TOKEN) : celui saisi ici le remplace. Effacer = revenir à celui de .env. Jamais réaffiché.'
+            : 'github_pat_… Les droits nécessaires sont listés dans le README. Jamais réaffiché.',
+          values,
+        ),
         field('Compte ou organisation cible', text('owner', { placeholder: s.owner ? `${s.owner} (propriétaire du jeton)` : 'ex. mon-compte' }), {
           hint: 'Vide = le compte du jeton GitHub.',
         }),
@@ -1629,8 +1618,15 @@ async function showSettings() {
       h(
         'fieldset',
         {},
-        h('legend', {}, 'Claude (abonnement Pro ou Max)'),
-        secretField('Jeton Claude', 'claudeToken', settings.claudeTokenSet, 'Créé avec « claude setup-token ». Jamais réaffiché.', values),
+        h('legend', {}, 'Claude (abonnement Pro, Max, Team ou Enterprise)'),
+        h('p', { class: 'muted small' }, 'Chacun met de préférence son propre jeton dans « Mon compte » : ses lancements utilisent alors son abonnement.'),
+        secretField(
+          'Jeton Claude commun',
+          'claudeToken',
+          settings.claudeTokenSet,
+          'Facultatif. Utilisé pour les personnes sans jeton personnel : il consomme l’abonnement de celui qui l’a créé (« claude setup-token »). Jamais réaffiché.',
+          values,
+        ),
         field(
           'Nombre de tours maximum par exécution',
           h('input', {
@@ -1767,6 +1763,7 @@ function forumFieldset(settings, values) {
 // --- router --------------------------------------------------------------------
 
 function route() {
+  if (!currentUser()) return undefined;
   const hash = location.hash.replace(/^#\/?/, '');
   const [page, ...rest] = hash.split('/');
   const nav = {
@@ -1775,6 +1772,8 @@ function route() {
     'mes-integrations': 'mine',
     suivi: 'mine',
     reglages: 'settings',
+    compte: 'account',
+    utilisateurs: 'users',
   }[page];
   document.querySelectorAll('[data-nav]').forEach((a) => {
     a.toggleAttribute('aria-current', a.dataset.nav === nav);
@@ -1784,19 +1783,28 @@ function route() {
   if (page === 'suivi') return showFollow(decodeURIComponent(rest[0] ?? ''), rest[1]);
   if (page === 'mes-integrations') return showMine();
   if (page === 'reglages') return showSettings();
+  if (page === 'compte') return showAccount();
+  if (page === 'utilisateurs') return showUsers();
   return showDashboard();
 }
 
-async function start() {
+let routing = false;
+
+/** Called once the user is logged in (and again after each new login). */
+async function onLoggedIn() {
   try {
     state.status = await api('status');
+    state.dashboard = null;
     document.getElementById('mode').hidden = !state.status.dryRun;
   } catch (err) {
     setView(errorBox(err.message));
     return;
   }
-  window.addEventListener('hashchange', route);
+  if (!routing) {
+    window.addEventListener('hashchange', route);
+    routing = true;
+  }
   route();
 }
 
-start();
+authStart(onLoggedIn);

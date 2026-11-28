@@ -244,3 +244,68 @@ test('the token check explains a refused token or a missing token', async () => 
     await none.close();
   }
 });
+
+test('each person launches with their own Claude token, else the shared one', async () => {
+  const world = await startWorld({ env: { NO_PASSWORD: '', APP_PASSWORD: 'a-long-enough-pass' } });
+  const session = () => {
+    let cookie = '';
+    return async (method, path, body) => {
+      const res = await fetch(`${world.app.base}/api/${path}`, {
+        method,
+        headers: { 'x-requested-with': 'integration-creator', 'content-type': 'application/json', cookie },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const set = res.headers.get('set-cookie');
+      if (set) cookie = set.split(';')[0];
+      return { status: res.status, body: await res.json() };
+    };
+  };
+  try {
+    await world.app.db.update((s) => {
+      s.security = { requireMfa: false };
+    });
+    const admin = session();
+    await admin('POST', 'auth/login', { username: 'admin', password: 'a-long-enough-pass' });
+    await admin('PUT', 'settings', { claudeToken: 'sk-ant-oat01-shared-secret' });
+    const created = await admin('POST', 'users', { username: 'bob', role: 'member', password: 'temporary-password-1' });
+    assert.equal(created.status, 200);
+
+    const bob = session();
+    await bob('POST', 'auth/login', { username: 'bob', password: 'temporary-password-1' });
+    await bob('POST', 'account/password', { current: 'temporary-password-1', password: 'a fresh secret phrase' });
+    assert.equal((await bob('GET', 'status')).body.claudeTokenSource, 'shared');
+    assert.equal((await bob('PUT', 'account/claude-token', { token: 'bad token' })).status, 400);
+    const saved = await bob('PUT', 'account/claude-token', { token: 'sk-ant-oat01-bob-personal-secret' });
+    assert.equal(saved.body.claudeTokenSet, true);
+    assert.equal(JSON.stringify((await bob('GET', 'account')).body).includes('bob-personal'), false, 'never sent back');
+    assert.equal((await bob('GET', 'status')).body.claudeTokenSource, 'personal');
+
+    const launched = await bob('POST', 'launches', REAL);
+    assert.equal(launched.status, 200, JSON.stringify(launched.body));
+    assert.deepEqual(launched.body.launchedBy.username, 'bob');
+    assert.equal(launched.body.claudeTokenSource, 'personal');
+    assert.equal(JSON.stringify(launched.body).includes('bob-personal'), false);
+    const settle = async (call, id) => {
+      for (let i = 0; i < 500; i += 1) {
+        const { body } = await call('GET', `launches/${id}`);
+        if (body.status !== 'running') return body;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      throw new Error('launch still running');
+    };
+    const done = await settle(bob, launched.body.id);
+    assert.equal(done.status, 'done', summary(done));
+    const repo = world.github.repos.get('alice/gladys-oral-b');
+    assert.equal(openSecret(world.github, repo.secrets.CLAUDE_CODE_OAUTH_TOKEN.encrypted_value), 'sk-ant-oat01-bob-personal-secret');
+
+    // The admin has no personal token: the shared one is used.
+    const other = await admin('POST', 'launches', { ...REAL, ideaKey: undefined, displayName: 'Autre', repoName: 'gladys-autre' });
+    assert.equal(other.body.claudeTokenSource, 'shared');
+    const last = await settle(admin, other.body.id);
+    assert.equal(last.status, 'done', summary(last));
+    const repo2 = world.github.repos.get('alice/gladys-autre');
+    assert.equal(openSecret(world.github, repo2.secrets.CLAUDE_CODE_OAUTH_TOKEN.encrypted_value), 'sk-ant-oat01-shared-secret');
+  } finally {
+    await world.close();
+  }
+});

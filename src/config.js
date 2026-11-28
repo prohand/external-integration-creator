@@ -3,6 +3,8 @@
 // Every external URL is configurable so the tests can point at fake servers.
 // -----------------------------------------------------------------------------
 
+import { MIN_PASSWORD_LENGTH } from './auth/crypto.js';
+
 const DEFAULTS = {
   PORT: '3000',
   HOST: '0.0.0.0',
@@ -31,6 +33,9 @@ const DEFAULTS = {
   PUBLISH_POLL_SECONDS: '10',
   STORE_CHECK_TIMEOUT_MINUTES: '15',
   RELEASE_TIMEOUT_MINUTES: '60',
+  SESSION_DAYS: '7',
+  SESSION_IDLE_HOURS: '12',
+  PUBLIC_URL: '',
 };
 
 function bool(value) {
@@ -71,7 +76,7 @@ export function normalizeBasePath(value) {
   return parts.length ? `/${parts.join('/')}` : '';
 }
 
-export const MIN_PASSWORD_LENGTH = 12;
+export { MIN_PASSWORD_LENGTH };
 
 /** Raised for a configuration the app refuses to start with. */
 export class ConfigError extends Error {}
@@ -113,29 +118,35 @@ export function loadConfig(env = process.env) {
     publishPollMs: positiveNumber('PUBLISH_POLL_SECONDS', get('PUBLISH_POLL_SECONDS')) * 1000,
     storeCheckTimeoutMs: positiveNumber('STORE_CHECK_TIMEOUT_MINUTES', get('STORE_CHECK_TIMEOUT_MINUTES')) * 60_000,
     releaseTimeoutMs: positiveNumber('RELEASE_TIMEOUT_MINUTES', get('RELEASE_TIMEOUT_MINUTES')) * 60_000,
+    sessionDays: positiveNumber('SESSION_DAYS', get('SESSION_DAYS')),
+    sessionIdleHours: positiveNumber('SESSION_IDLE_HOURS', get('SESSION_IDLE_HOURS')),
+    publicUrl: parsePublicUrl(get('PUBLIC_URL')),
   });
   checkAccess(config);
   return config;
 }
 
+function parsePublicUrl(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new ConfigError(`PUBLIC_URL invalide : "${text}" (ex. https://creator.mondomaine.fr)`);
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new ConfigError('PUBLIC_URL doit commencer par https://');
+  return url.origin;
+}
+
 /**
- * The app acts with the owner's GitHub token: it never runs open by accident.
- * A password is required, unless NO_PASSWORD=true says that an
- * authenticating reverse proxy (Pangolin, Authelia…) stands in front.
+ * Access: user accounts (login page) by default. APP_PASSWORD, when set,
+ * only creates the first administrator: it must then be long enough.
+ * NO_PASSWORD=true turns the accounts off (an authenticating reverse proxy
+ * such as Pangolin or Authelia stands in front).
  */
 export function checkAccess(config) {
-  if (config.appPassword) {
-    if (config.appPassword.length < MIN_PASSWORD_LENGTH) {
-      throw new ConfigError(
-        `APP_PASSWORD est trop court : ${MIN_PASSWORD_LENGTH} caractères minimum (l'appli agit avec votre jeton GitHub).`,
-      );
-    }
-    return;
-  }
-  if (!config.noPassword) {
-    throw new ConfigError(
-      'Aucun mot de passe : réglez APP_PASSWORD (12 caractères minimum), ou NO_PASSWORD=true ' +
-        "si un reverse proxy avec authentification (Pangolin, Authelia…) protège déjà l'appli.",
-    );
+  if (config.appPassword && config.appPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new ConfigError(`APP_PASSWORD est trop court : ${MIN_PASSWORD_LENGTH} caractères minimum.`);
   }
 }

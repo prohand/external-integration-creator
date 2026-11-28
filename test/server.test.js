@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { ConfigError, loadConfig, normalizeBasePath } from '../src/config.js';
-import { createBasicAuth, hostName, isHostAllowed } from '../src/web.js';
+import { hostName, isHostAllowed } from '../src/web.js';
+import { createLimiter } from '../src/auth/limiter.js';
 import { redact, registerSecret } from '../src/log.js';
 import { startFakeTracker } from './fakes/tracker.js';
 import { startApp } from './helpers.js';
@@ -108,72 +109,30 @@ test('works under a BASE_PATH, with <base href> and a redirect', async () => {
   }
 });
 
-test('Basic Auth protects everything but /healthz', async () => {
-  const app = await startApp({ APP_PASSWORD: 's3cret-pass-long', APP_USER: 'me', NO_PASSWORD: '' });
-  const auth = (u, p) => ({ headers: { authorization: `Basic ${Buffer.from(`${u}:${p}`).toString('base64')}` } });
-  try {
-    const anon = await fetch(`${app.base}/`);
-    assert.equal(anon.status, 401);
-    assert.match(anon.headers.get('www-authenticate'), /^Basic /);
-    assert.equal((await fetch(`${app.base}/`, auth('me', 'wrong'))).status, 401);
-    assert.equal((await fetch(`${app.base}/`, auth('me', 's3cret-pass-long'))).status, 200);
-    assert.equal((await fetch(`${app.base}/healthz`)).status, 200);
-    // Brute force is slowed down per address.
-    for (let i = 0; i < 10; i += 1) await fetch(`${app.base}/`, auth('me', `bad${i}`));
-    assert.equal((await fetch(`${app.base}/`, auth('me', 's3cret-pass-long'))).status, 429);
-  } finally {
-    await app.close();
-  }
-});
-
-test('the app never starts open by accident', () => {
-  assert.throws(() => loadConfig({}), (err) => err instanceof ConfigError && /APP_PASSWORD/.test(err.message));
-  assert.throws(() => loadConfig({ APP_PASSWORD: 'short' }), /12 caractères minimum/);
+test('the configuration refuses a short APP_PASSWORD and starts without one', () => {
+  assert.throws(() => loadConfig({ APP_PASSWORD: 'short' }), (err) => err instanceof ConfigError && /12 caractères minimum/.test(err.message));
   assert.equal(loadConfig({ APP_PASSWORD: 'a-long-enough-pass' }).appPassword, 'a-long-enough-pass');
+  assert.equal(loadConfig({}).noPassword, false, 'accounts by default');
   assert.equal(loadConfig({ NO_PASSWORD: 'true' }).noPassword, true);
   assert.equal(loadConfig({ NO_PASSWORD: 'true' }).trustProxy, false, 'X-Forwarded-* ignored by default');
+  assert.equal(loadConfig({ PUBLIC_URL: 'https://creator.example.org/' }).publicUrl, 'https://creator.example.org');
+  assert.throws(() => loadConfig({ PUBLIC_URL: 'ftp://x' }), /PUBLIC_URL/);
 });
 
-test('a spoofed X-Forwarded-For cannot dodge the lockout', async () => {
-  const bad = { authorization: `Basic ${Buffer.from('admin:bad').toString('base64')}` };
-  // Default (no proxy): the header is ignored, the socket address counts.
-  const direct = await startApp({ APP_PASSWORD: 'pw-123456789012', NO_PASSWORD: '' });
-  try {
-    for (let i = 0; i < 10; i += 1) {
-      await fetch(`${direct.base}/`, { headers: { ...bad, 'x-forwarded-for': `198.51.100.${i}` } });
-    }
-    assert.equal((await fetch(`${direct.base}/`, { headers: { ...bad, 'x-forwarded-for': '198.51.100.99' } })).status, 429);
-  } finally {
-    await direct.close();
-  }
-  // Behind a proxy: the last entry (appended by the proxy) counts, not the client's.
-  const proxied = await startApp({ APP_PASSWORD: 'pw-123456789012', NO_PASSWORD: '', TRUST_PROXY: 'true' });
-  try {
-    const via = (spoofed, real) => ({ headers: { ...bad, 'x-forwarded-for': `${spoofed}, ${real}` } });
-    for (let i = 0; i < 10; i += 1) await fetch(`${proxied.base}/`, via(`10.0.0.${i}`, '203.0.113.7'));
-    assert.equal((await fetch(`${proxied.base}/`, via('10.9.9.9', '203.0.113.7'))).status, 429);
-    assert.equal((await fetch(`${proxied.base}/`, via('10.9.9.9', '203.0.113.8'))).status, 401);
-  } finally {
-    await proxied.close();
-  }
-});
-
-test('failures are limited globally and the tracked addresses are capped', () => {
+test('failures are limited per key, globally, and the tracked keys are capped', () => {
   let t = 0;
-  const check = createBasicAuth({
-    user: 'me',
-    password: 'a-long-enough-pass',
-    limits: { window: 1000, perAddress: 10, global: 5, maxTracked: 3 },
-    now: () => t,
-  });
-  const req = { headers: { authorization: `Basic ${Buffer.from('me:bad').toString('base64')}` } };
-  const good = { headers: { authorization: `Basic ${Buffer.from('me:a-long-enough-pass').toString('base64')}` } };
-  for (let i = 0; i < 5; i += 1) assert.equal(check(req, `ip-${i}`).status, 401);
-  assert.ok(check.tracked() <= 3, 'memory stays bounded');
-  assert.equal(check(req, 'ip-new').status, 429, 'every address is slowed down past the global limit');
-  assert.equal(check(good, 'ip-owner').status, 429);
+  const limiter = createLimiter({ limits: { window: 1000, perKey: 3, global: 5, maxTracked: 3 }, now: () => t });
+  for (let i = 0; i < 3; i += 1) limiter.fail('ip-a');
+  assert.equal(limiter.blocked('ip-a'), true);
+  assert.equal(limiter.blocked('ip-b'), false);
+  limiter.fail('ip-c');
+  limiter.fail('ip-d');
+  assert.equal(limiter.blocked('ip-new'), true, 'every key is slowed down past the global limit');
+  limiter.fail('ip-e');
+  assert.ok(limiter.tracked() <= 3, 'memory stays bounded');
   t = 2000; // window over
-  assert.equal(check(good, 'ip-owner').ok, true);
+  assert.equal(limiter.blocked('ip-a'), false);
+  assert.equal(limiter.blocked('ip-new'), false);
 });
 
 test('DNS rebinding: unknown host names are refused', async () => {

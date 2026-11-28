@@ -215,7 +215,7 @@ export function claudeWorkflow({ maxTurns, checkout, setupNode }) {
   return `# -----------------------------------------------------------------------------
 # Claude Code answers "@claude" in issues, comments and pull request reviews.
 #
-# It runs on the Claude subscription (Pro or Max) of the repository owner:
+# It runs on the Claude subscription (Pro, Max, Team or Enterprise) of the person who launched it:
 # secret CLAUDE_CODE_OAUTH_TOKEN, created with \`claude setup-token\`. No API key.
 # Only the owner, members and collaborators can start it. --max-turns limits
 # each run, to spare the subscription limits.

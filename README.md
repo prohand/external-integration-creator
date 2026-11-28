@@ -16,8 +16,9 @@ Chacun lance sa propre instance, avec son propre jeton GitHub. Il n'y a pas d'in
 ## Sommaire
 
 - [Installation avec Docker](#installation-avec-docker)
+- [Comptes, double authentification et passkeys](#comptes-double-authentification-et-passkeys)
 - [Créer le jeton GitHub](#créer-le-jeton-github)
-- [Jeton Claude (abonnement Pro ou Max)](#jeton-claude-abonnement-pro-ou-max)
+- [Jeton Claude (abonnement Pro, Max, Team ou Enterprise)](#jeton-claude-abonnement-pro-max-team-ou-enterprise)
 - [Suivre le développement en direct](#suivre-le-développement-en-direct)
 - [Publier dans le store](#publier-dans-le-store)
 - [Connecter son compte du forum](#connecter-son-compte-du-forum)
@@ -39,17 +40,24 @@ mkdir external-integration-creator && cd external-integration-creator
 # les deux seuls fichiers nécessaires
 curl -fsSLO https://raw.githubusercontent.com/prohand/external-integration-creator/main/docker-compose.yml
 curl -fsSL -o .env https://raw.githubusercontent.com/prohand/external-integration-creator/main/.env.example
-nano .env                       # au minimum : GITHUB_TOKEN, et APP_PASSWORD ou NO_PASSWORD=true
+nano .env                       # facultatif au départ : tout se règle aussi dans l'interface
 
 mkdir -p data
 sudo chown 1000:1000 data       # l'appli tourne avec l'utilisateur "node" (uid 1000), pas root
 
 docker compose up -d
+docker compose logs external-integration-creator | grep installation   # code de première installation
 ```
 
-Ouvrez ensuite `http://localhost:3000` sur le serveur. Pour y accéder depuis un autre poste, passez par un reverse proxy, ou réglez `BIND_ADDRESS=0.0.0.0` avec un mot de passe (voir [Derrière un reverse proxy](#derrière-un-reverse-proxy-exemple-pangolin)).
+Ouvrez ensuite `http://localhost:3000` sur le serveur :
 
-L'appli agit avec votre jeton GitHub : elle **refuse de démarrer sans protection**. Réglez `APP_PASSWORD` (12 caractères minimum), ou `NO_PASSWORD=true` si un reverse proxy avec authentification la protège déjà.
+1. **Première installation** : entrez le code affiché dans les journaux, puis créez le compte administrateur (nom + mot de passe de 12 caractères minimum). Le code change à chaque redémarrage tant qu'aucun compte n'existe.
+2. **Double authentification** : elle est obligatoire par défaut. Ajoutez une application d'authentification (QR code) ou une clé d'accès (passkey). Notez les 10 codes de secours affichés.
+3. **Réglages** : collez le jeton GitHub et le jeton Claude (voir plus bas).
+
+Pour y accéder depuis un autre poste, passez par un reverse proxy (obligatoire pour les passkeys : HTTPS et nom de domaine), ou réglez `BIND_ADDRESS=0.0.0.0` (voir [Derrière un reverse proxy](#derrière-un-reverse-proxy-exemple-pangolin)).
+
+Variante : `APP_PASSWORD` (12 caractères minimum) dans `.env` crée directement le premier administrateur (`APP_USER`, `admin` par défaut), sans code d'installation. Retirez-le de `.env` ensuite.
 
 Quelques chiffres :
 
@@ -64,12 +72,15 @@ Les réglages se trouvent dans `.env` (chaque ligne est commentée dans `.env.ex
 | `PORT` | port d'écoute dans le conteneur | `3000` |
 | `HOST_PORT` | port publié sur l'hôte | `3000` |
 | `BASE_PATH` | sous-chemin derrière un proxy, par ex. `/gladys-creator` | vide |
-| `APP_PASSWORD` | mot de passe (Basic Auth), 12 caractères minimum | **obligatoire**, sauf `NO_PASSWORD=true` |
-| `NO_PASSWORD` | `true` seulement derrière un reverse proxy qui authentifie (Pangolin, Authelia…) | `false` |
+| `APP_PASSWORD` | crée le premier administrateur (`APP_USER`) au premier démarrage, 12 caractères minimum | vide (code d'installation) |
+| `NO_PASSWORD` | `true` = comptes désactivés, seulement derrière un reverse proxy qui authentifie (Pangolin, Authelia…) | `false` |
+| `SESSION_DAYS` | durée maximale d'une session | `7` |
+| `SESSION_IDLE_HOURS` | déconnexion après ce temps sans activité | `12` |
+| `PUBLIC_URL` | adresse publique (ex. `https://creator.mondomaine.fr`), pour les passkeys si le proxy ne transmet pas l'adresse | vide (déduite de la requête) |
 | `BIND_ADDRESS` | adresse où docker compose publie le port : `127.0.0.1` = cette machine seulement | `127.0.0.1` |
 | `ALLOWED_HOSTS` | noms de domaine acceptés (ex. `creator.mondomaine.fr`) ; les adresses IP et `localhost` marchent toujours | vide |
 | `TRUST_PROXY` | `true` seulement derrière un reverse proxy | `false` |
-| `GITHUB_TOKEN` | jeton GitHub fine-grained | — |
+| `GITHUB_TOKEN` | jeton GitHub fine-grained (facultatif : il se règle aussi dans **Réglages**, qui a priorité) | — |
 | `DRY_RUN` | mode simulation : rien n'est créé | `false` |
 | `CACHE_TTL_MINUTES` | durée du cache des sources | `15` |
 
@@ -83,6 +94,64 @@ docker compose up -d
 Étiquettes de l'image : `latest` (dernière release), `X.Y.Z` et `X.Y` (une version précise, pour ne pas changer de version sans le vouloir).
 
 Construire l'image soi-même (pour modifier le code) : clonez le dépôt, décommentez `build: .` dans `docker-compose.yml`, puis `docker compose up -d --build`.
+
+---
+
+## Comptes, double authentification et passkeys
+
+L'appli agit avec votre jeton GitHub : chaque personne a son propre compte, protégé par un mot de passe **et** une double authentification.
+
+**Connexion** (page de connexion de l'appli) :
+
+- nom d'utilisateur + mot de passe, puis un code de l'application d'authentification, une clé d'accès ou un code de secours ;
+- ou directement une **clé d'accès (passkey)** : empreinte, visage, code PIN du téléphone, YubiKey… Elle vaut double authentification à elle seule (l'appareil + le PIN ou la biométrie), et protège contre l'hameçonnage.
+
+**Mon compte** (clic sur votre nom, en haut à droite) :
+
+- application d'authentification (TOTP : Aegis, 2FAS, Google Authenticator, Bitwarden…) : QR code à scanner, puis un code pour confirmer ;
+- clés d'accès : ajouter, renommer, supprimer ;
+- 10 codes de secours (un seul usage chacun), à régénérer si besoin ;
+- jeton Claude personnel (voir [Jeton Claude](#jeton-claude-abonnement-pro-max-team-ou-enterprise)) ;
+- changement du mot de passe (ferme les autres sessions) ;
+- sessions ouvertes (appareil, adresse IP, dernière activité), à fermer à distance.
+
+Les changements sensibles redemandent le mot de passe si la connexion date de plus de 10 minutes.
+
+**Utilisateurs** (administrateurs) :
+
+| Rôle | Peut |
+| --- | --- |
+| Administrateur | tout, dont les comptes, le jeton GitHub, le jeton Claude commun et le forum |
+| Membre | lancer, suivre et publier des intégrations, écrire à Claude |
+| Lecteur | consulter seulement |
+
+- créer un compte : mot de passe temporaire (généré ou choisi), à changer à la première connexion ;
+- changer le rôle, désactiver, supprimer, réinitialiser le mot de passe ou la double authentification, fermer les sessions ;
+- rendre la double authentification obligatoire ou non (obligatoire par défaut) ;
+- **journal** : connexions réussies et ratées, changements de comptes et de jetons, avec l'adresse IP.
+
+Le dernier administrateur actif ne peut pas être supprimé, désactivé ou rétrogradé.
+
+**Protections** :
+
+- mots de passe hachés avec scrypt (jamais stockés en clair) ;
+- cookie de session `HttpOnly` et `SameSite=Strict` (et `Secure` en HTTPS) ;
+- après 10 échecs depuis une même adresse, elle est bloquée 15 minutes ; après 100 échecs au total, toutes les adresses sont ralenties ; un compte est bloqué 15 minutes après 20 échecs ;
+- même message d'erreur pour un compte inconnu ou un mauvais mot de passe ;
+- un code TOTP ou un code de secours ne sert qu'une fois.
+
+**Passkeys : conditions.** Le navigateur ne les autorise qu'en **HTTPS avec un nom de domaine** (ou sur `http://localhost`). Pas sur `http://192.168.x.x`. Passez par votre reverse proxy. Une passkey est liée au nom de domaine : si vous le changez, ajoutez-en une nouvelle.
+
+**Administrateur bloqué** (téléphone perdu, plus de codes de secours) :
+
+```bash
+docker compose stop
+docker compose run --rm external-integration-creator node src/cli.js users
+docker compose run --rm external-integration-creator node src/cli.js reset admin
+docker compose start
+```
+
+`reset` donne un mot de passe temporaire, retire la double authentification et ferme les sessions. Arrêtez bien l'appli avant : elle et la commande écrivent le même fichier.
 
 ---
 
@@ -114,8 +183,10 @@ L'appli utilise un jeton **fine-grained** (plus sûr qu'un jeton classique : les
    | --- | --- | --- |
    | Watching | Read and write | suivre (« Watch ») le nouveau dépôt |
 
-9. Cliquez sur **Generate token**, copiez le jeton (`github_pat_…`) et collez-le dans `.env` (`GITHUB_TOKEN=`).
-10. Redémarrez : `docker compose up -d`.
+9. Cliquez sur **Generate token** et copiez le jeton (`github_pat_…`).
+10. Dans l'appli, page **Réglages → GitHub → Jeton GitHub**, collez-le et cliquez sur **Enregistrer** (administrateurs seulement). Il est gardé dans `/data` et n'est **jamais réaffiché**. Pas besoin de redémarrer.
+
+   Autre possibilité : `GITHUB_TOKEN=` dans `.env`, puis `docker compose up -d`. Le jeton saisi dans l'interface a priorité ; **Effacer** revient à celui de `.env`.
 
 Ensuite, dans l'appli, page **Réglages → Tester le jeton GitHub** :
 
@@ -128,21 +199,29 @@ Pendant un lancement, si un droit manque, l'étape concernée dit lequel et à q
 
 ---
 
-## Jeton Claude (abonnement Pro ou Max)
+## Jeton Claude (abonnement Pro, Max, Team ou Enterprise)
 
-Claude peut écrire le code de l'intégration directement dans le dépôt, via GitHub Actions. L'appli utilise **uniquement votre abonnement Claude** (Pro ou Max), jamais une clé d'API payante.
+Claude peut écrire le code de l'intégration directement dans le dépôt, via GitHub Actions. L'appli utilise **uniquement un abonnement Claude** (Pro, Max, Team ou Enterprise), jamais une clé d'API payante.
 
-1. Sur votre ordinateur, installez Claude Code : <https://docs.claude.com/fr/docs/claude-code>.
+1. Sur votre ordinateur, installez Claude Code : <https://code.claude.com/docs>.
 2. Lancez :
 
    ```bash
    claude setup-token
    ```
 
-3. Connectez-vous avec votre compte Claude. La commande affiche un jeton longue durée.
-4. Dans l'appli, page **Réglages → Jeton Claude**, collez ce jeton. Il est gardé dans `/data` et n'est **jamais réaffiché**.
+3. Connectez-vous avec votre compte Claude habituel. La commande affiche un jeton valable **1 an**.
+4. Dans l'appli, page **Mon compte → Claude → Jeton Claude personnel**, collez ce jeton. Il est gardé dans `/data` et n'est **jamais réaffiché**.
 
-À chaque lancement, l'appli enregistre ce jeton comme secret `CLAUDE_CODE_OAUTH_TOKEN` dans le nouveau dépôt (chiffré avec la clé publique du dépôt). Sans jeton, les étapes liées à Claude sont simplement sautées.
+Chaque personne met son propre jeton : ses lancements utilisent **son** abonnement (sur l'offre Team, son siège). Un administrateur peut aussi régler un **jeton commun** (page **Réglages**), utilisé pour les personnes sans jeton personnel : il consomme l'abonnement de celui qui l'a créé.
+
+À chaque lancement, l'appli enregistre le jeton de la personne qui lance comme secret `CLAUDE_CODE_OAUTH_TOKEN` dans le nouveau dépôt (chiffré avec la clé publique du dépôt). Le workflow `claude.yml` (`anthropics/claude-code-action@v1`) l'utilise. Sans jeton, les étapes liées à Claude sont simplement sautées. Changer de jeton ne modifie pas les dépôts déjà lancés.
+
+Bon à savoir :
+
+- l'usage de Claude dans GitHub Actions compte sur l'abonnement, comme votre usage normal ;
+- les conditions d'Anthropic prévoient ce jeton pour un usage ordinaire de Claude Code par son titulaire : chacun son jeton, pour ses propres dépôts ;
+- au bout d'un an, refaites `claude setup-token` et collez le nouveau jeton.
 
 Pour ménager les limites de l'abonnement, chaque exécution de Claude est limitée à 40 tours (réglable dans `config/repo-settings.json`, clé `claude.max_turns`).
 
@@ -221,11 +300,11 @@ L'appli écoute sur un seul port (`PORT`, 3000 par défaut). Elle gère :
 
 1. Dans Pangolin, créez une **ressource HTTP** (par exemple `creator.mondomaine.fr`).
 2. Cible : `http://<ip-du-serveur>:3000` (ou `http://external-integration-creator:3000` si Pangolin/Newt est sur le même réseau Docker).
-3. Laissez l'**authentification Pangolin** activée. Dans `.env` :
-   - `NO_PASSWORD=true` (Pangolin authentifie déjà) ;
+3. Dans `.env` :
    - `ALLOWED_HOSTS=creator.mondomaine.fr` (sinon l'appli refuse ce nom de domaine) ;
    - `TRUST_PROXY=true` ;
-   - gardez `BIND_ADDRESS=127.0.0.1` : le port n'est alors joignable que depuis le serveur lui-même (et le réseau Docker), jamais en direct depuis le réseau, ce qui contournerait l'authentification de Pangolin.
+   - gardez `BIND_ADDRESS=127.0.0.1` : le port n'est alors joignable que depuis le serveur lui-même (et le réseau Docker), jamais en direct depuis le réseau ;
+   - vous pouvez garder les comptes de l'appli (recommandé : passkeys, rôles, journal) **et** l'authentification Pangolin. Ou désactiver les comptes avec `NO_PASSWORD=true` si Pangolin suffit : tout le monde est alors administrateur.
 4. Pour servir l'appli dans un sous-chemin plutôt qu'un sous-domaine, réglez `BASE_PATH=/gladys-creator` et utilisez ce même chemin dans Pangolin.
 
 ### Nginx (pour info)
@@ -243,10 +322,7 @@ location /gladys-creator/ {
 
 ### Sans reverse proxy
 
-Réglez `APP_PASSWORD` (12 caractères minimum, et éventuellement `APP_USER`) et `BIND_ADDRESS=0.0.0.0` pour ouvrir le port au réseau. Laissez `TRUST_PROXY=false`. Le navigateur demande un identifiant et un mot de passe. Contre les essais en rafale :
-
-- après 10 essais ratés depuis une même adresse, cette adresse est bloquée 15 minutes ;
-- après 100 essais ratés au total, toutes les adresses sont ralenties jusqu'à la fin des 15 minutes (redémarrer le conteneur lève le blocage).
+Réglez `BIND_ADDRESS=0.0.0.0` pour ouvrir le port au réseau, et laissez `TRUST_PROXY=false`. La page de connexion de l'appli protège l'accès (voir [Comptes](#comptes-double-authentification-et-passkeys)). Attention : en HTTP, le mot de passe et le cookie passent en clair sur le réseau, et les passkeys ne marchent pas. Préférez un reverse proxy en HTTPS.
 
 Pour l'ouvrir via un nom de domaine, ajoutez-le à `ALLOWED_HOSTS`.
 
@@ -254,7 +330,7 @@ Pour l'ouvrir via un nom de domaine, ajoutez-le à `ALLOWED_HOSTS`.
 
 ## Sauvegarder /data
 
-Tout l'état de l'appli tient dans **un seul fichier** : `data/state.json` (intégrations lancées, réservations, réglages, clés du forum et de Claude).
+Tout l'état de l'appli tient dans **un seul fichier** : `data/state.json` (comptes et sessions, intégrations lancées, réservations, réglages, jetons GitHub et Claude saisis dans l'interface, clé du forum, journal).
 
 ```bash
 # sauvegarde (le fichier est écrit de façon atomique : pas besoin d'arrêter l'appli)
@@ -268,7 +344,7 @@ sudo chown 1000:1000 data/state.json
 docker compose start
 ```
 
-Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu sûr.
+Si le jeton GitHub est dans `.env`, sauvegardez aussi ce fichier, en lieu sûr.
 
 ---
 
@@ -284,7 +360,8 @@ Le jeton GitHub, lui, est dans `.env` : sauvegardez ce fichier à part, en lieu 
 4. **Suivi, onglet Développement** : voir [Suivre le développement en direct](#suivre-le-développement-en-direct).
    Le bouton **Publier**, sous les étapes du lancement : voir [Publier dans le store](#publier-dans-le-store).
 5. **Mes intégrations** : toutes vos intégrations lancées et leur état, et le message « Je prends : » à poster sur le forum pour celles pas encore annoncées. Une simulation peut être oubliée.
-6. **Réglages** : compte GitHub cible, topics en plus, jeton Claude, compte du forum. Les clés ne sont jamais réaffichées.
+6. **Réglages** : jeton GitHub, compte GitHub cible, topics en plus, jeton Claude commun, compte du forum. Les clés ne sont jamais réaffichées. Modifiables par les administrateurs.
+7. **Mon compte** et **Utilisateurs** : voir [Comptes](#comptes-double-authentification-et-passkeys).
 
 ## Mode simulation
 

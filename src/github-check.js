@@ -43,7 +43,7 @@ async function probeRepo(gh, owner, ownerType) {
  */
 export async function checkToken(gh, { owner: wantedOwner } = {}) {
   if (!gh.token) {
-    return { ok: false, message: 'Aucun jeton : ajoutez GITHUB_TOKEN dans .env puis redémarrez.', permissions: [] };
+    return { ok: false, message: 'Aucun jeton : collez-le dans Réglages (ou GITHUB_TOKEN dans .env).', permissions: [] };
   }
   let me;
   let headers;
