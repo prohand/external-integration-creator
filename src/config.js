@@ -11,7 +11,9 @@ const DEFAULTS = {
   APP_PASSWORD: '',
   DATA_DIR: '/data',
   CACHE_TTL_MINUTES: '15',
-  TRUST_PROXY: 'true',
+  TRUST_PROXY: 'false',
+  NO_PASSWORD: 'false',
+  ALLOWED_HOSTS: '',
   DRY_RUN: 'false',
   LOG_LEVEL: 'info',
   TRACKER_BASE_URL: 'https://william-de71.github.io/gladys-integrations-tracker',
@@ -69,9 +71,21 @@ export function normalizeBasePath(value) {
   return parts.length ? `/${parts.join('/')}` : '';
 }
 
+export const MIN_PASSWORD_LENGTH = 12;
+
+/** Raised for a configuration the app refuses to start with. */
+export class ConfigError extends Error {}
+
+function parseHosts(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export function loadConfig(env = process.env) {
   const get = (key) => (env[key] !== undefined && env[key] !== '' ? env[key] : DEFAULTS[key]);
-  return Object.freeze({
+  const config = Object.freeze({
     port: Number.parseInt(get('PORT'), 10),
     host: get('HOST'),
     basePath: normalizeBasePath(get('BASE_PATH')),
@@ -80,6 +94,8 @@ export function loadConfig(env = process.env) {
     dataDir: get('DATA_DIR'),
     cacheTtlMs: positiveNumber('CACHE_TTL_MINUTES', get('CACHE_TTL_MINUTES')) * 60_000,
     trustProxy: bool(get('TRUST_PROXY')),
+    noPassword: bool(get('NO_PASSWORD')),
+    allowedHosts: parseHosts(get('ALLOWED_HOSTS')),
     dryRun: bool(get('DRY_RUN')),
     logLevel: get('LOG_LEVEL'),
     trackerBaseUrl: trimSlash(get('TRACKER_BASE_URL')),
@@ -98,4 +114,28 @@ export function loadConfig(env = process.env) {
     storeCheckTimeoutMs: positiveNumber('STORE_CHECK_TIMEOUT_MINUTES', get('STORE_CHECK_TIMEOUT_MINUTES')) * 60_000,
     releaseTimeoutMs: positiveNumber('RELEASE_TIMEOUT_MINUTES', get('RELEASE_TIMEOUT_MINUTES')) * 60_000,
   });
+  checkAccess(config);
+  return config;
+}
+
+/**
+ * The app acts with the owner's GitHub token: it never runs open by accident.
+ * A password is required, unless NO_PASSWORD=true says that an
+ * authenticating reverse proxy (Pangolin, Authelia…) stands in front.
+ */
+export function checkAccess(config) {
+  if (config.appPassword) {
+    if (config.appPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new ConfigError(
+        `APP_PASSWORD est trop court : ${MIN_PASSWORD_LENGTH} caractères minimum (l'appli agit avec votre jeton GitHub).`,
+      );
+    }
+    return;
+  }
+  if (!config.noPassword) {
+    throw new ConfigError(
+      'Aucun mot de passe : réglez APP_PASSWORD (12 caractères minimum), ou NO_PASSWORD=true ' +
+        "si un reverse proxy avec authentification (Pangolin, Authelia…) protège déjà l'appli.",
+    );
+  }
 }

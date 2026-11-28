@@ -12,7 +12,8 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - '${HOST_PORT:-3000}:${PORT:-3000}'
+      # 127.0.0.1 by default: this machine only (see BIND_ADDRESS in .env).
+      - '${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-3000}:${PORT:-3000}'
     volumes:
       - ./data:/data
     read_only: true

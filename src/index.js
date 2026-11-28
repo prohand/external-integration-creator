@@ -13,7 +13,13 @@ try {
   // No .env file: the environment (docker compose env_file) is used as-is.
 }
 
-const config = loadConfig();
+let config;
+try {
+  config = loadConfig();
+} catch (err) {
+  process.stderr.write(`Configuration refusée : ${err.message}\n`);
+  process.exit(1);
+}
 setLogLevel(config.logLevel);
 registerSecret(config.githubToken);
 registerSecret(config.appPassword);

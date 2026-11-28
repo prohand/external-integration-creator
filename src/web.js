@@ -65,15 +65,41 @@ export class Router {
   }
 }
 
-/** Client info, reading the X-Forwarded-* headers when behind a trusted proxy. */
+/**
+ * Client info. Behind a trusted reverse proxy (TRUST_PROXY=true), the client
+ * address is the LAST X-Forwarded-For entry: the one the proxy appended. The
+ * entries before it come from the client and can be anything.
+ */
 export function clientInfo(req, trustProxy) {
-  const first = (h) => String(req.headers[h] ?? '').split(',')[0].trim();
-  const fromProxy = (h) => (trustProxy ? first(h) : '');
+  const last = (h) => String(req.headers[h] ?? '').split(',').map((v) => v.trim()).filter(Boolean).at(-1) ?? '';
+  const fromProxy = (h) => (trustProxy ? last(h) : '');
   return {
     ip: fromProxy('x-forwarded-for') || req.socket.remoteAddress || '',
     proto: fromProxy('x-forwarded-proto') || (req.socket.encrypted ? 'https' : 'http'),
     host: fromProxy('x-forwarded-host') || req.headers.host || '',
   };
+}
+
+/** Host name of a Host header ("[::1]:3000" -> "::1", "a.b:80" -> "a.b"). */
+export function hostName(header) {
+  const value = String(header ?? '').trim().toLowerCase();
+  if (value.startsWith('[')) return value.slice(1, value.indexOf(']'));
+  return value.replace(/:\d+$/, '');
+}
+
+const IPV4 = /^(\d{1,3})(\.\d{1,3}){3}$/;
+
+/**
+ * DNS rebinding guard: IP addresses and localhost are accepted, a domain name
+ * only when listed in ALLOWED_HOSTS ("*.example.org" allows subdomains).
+ */
+export function isHostAllowed(header, allowedHosts = []) {
+  const host = hostName(header);
+  if (!host) return false;
+  if (host === 'localhost' || IPV4.test(host) || host.includes(':')) return true;
+  return allowedHosts.some((rule) =>
+    rule.startsWith('*.') ? host.endsWith(rule.slice(1)) && host.length > rule.length - 1 : host === rule,
+  );
 }
 
 const SECURITY_HEADERS = {
@@ -124,20 +150,36 @@ export async function readJsonBody(req, limit = 1_000_000) {
 
 const digest = (value) => createHash('sha256').update(String(value)).digest();
 
+export const AUTH_LIMITS = {
+  window: 15 * 60_000, // failures are counted over 15 minutes
+  perAddress: 10, // then that address is blocked until the window ends
+  global: 100, // and every address is slowed down past this many failures
+  maxTracked: 10_000, // addresses remembered at most (oldest dropped first)
+};
+
 /**
- * Basic Auth check. Returns true when no password is configured.
- * Repeated failures from one address are slowed down (429).
+ * Basic Auth check. Returns { ok: true } when no password is configured.
+ * Failures are limited per address and globally (429), so that changing
+ * addresses does not allow unlimited guessing.
  */
-export function createBasicAuth({ user, password }) {
+export function createBasicAuth({ user, password, limits = AUTH_LIMITS, now = () => Date.now() }) {
   const failures = new Map(); // ip -> { count, since }
-  const WINDOW = 15 * 60_000;
-  const MAX = 10;
-  return function check(req, ip) {
+  let global = { count: 0, since: now() };
+
+  const forget = (t) => {
+    for (const [ip, entry] of failures) {
+      if (t - entry.since > limits.window) failures.delete(ip);
+    }
+  };
+
+  const check = function check(req, ip) {
     if (!password) return { ok: true };
-    const now = Date.now();
+    const t = now();
+    if (t - global.since > limits.window) global = { count: 0, since: t };
     const entry = failures.get(ip);
-    if (entry && now - entry.since > WINDOW) failures.delete(ip);
-    if ((failures.get(ip)?.count ?? 0) >= MAX) return { ok: false, status: 429 };
+    if (entry && t - entry.since > limits.window) failures.delete(ip);
+    if ((failures.get(ip)?.count ?? 0) >= limits.perAddress) return { ok: false, status: 429 };
+    if (global.count >= limits.global) return { ok: false, status: 429 };
 
     const match = /^Basic\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
     if (match) {
@@ -151,12 +193,20 @@ export function createBasicAuth({ user, password }) {
         failures.delete(ip);
         return { ok: true };
       }
-      const current = failures.get(ip) ?? { count: 0, since: now };
+      global.count += 1;
+      const current = failures.get(ip) ?? { count: 0, since: t };
       current.count += 1;
+      failures.delete(ip);
       failures.set(ip, current);
+      if (failures.size > limits.maxTracked) {
+        forget(t);
+        while (failures.size > limits.maxTracked) failures.delete(failures.keys().next().value);
+      }
     }
     return { ok: false, status: 401 };
   };
+  check.tracked = () => failures.size;
+  return check;
 }
 
 const MIME = {
